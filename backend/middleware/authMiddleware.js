@@ -1,0 +1,3 @@
+const { verifyToken } = require("../utils/jwt");
+const User = require("../models/User");
+exports.requireAuth = async (req, res, next) => { try { const header = req.headers.authorization || ""; if (!header.startsWith("Bearer ")) return res.status(401).json({ success: false, message: "Authentication required", code: "UNAUTHORIZED" }); const payload = verifyToken(header.slice(7)); const user = await User.findById(payload.userId).select("-passwordHash"); if (!user) return res.status(401).json({ success: false, message: "User session is invalid", code: "UNAUTHORIZED" }); req.user = user; next(); } catch (error) { res.status(401).json({ success: false, message: "Invalid or expired token", code: "UNAUTHORIZED" }); } };

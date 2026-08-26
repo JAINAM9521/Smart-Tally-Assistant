@@ -1,0 +1,2 @@
+const mongoose = require("mongoose");
+module.exports = mongoose.model("ValidationReport", new mongoose.Schema({ user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }, validation: { type: mongoose.Schema.Types.ObjectId, ref: "Validation" }, fileName: String, score: Number, errors: Number, warnings: Number, fixed: Number, pending: Number, status: String }, { timestamps: true }));

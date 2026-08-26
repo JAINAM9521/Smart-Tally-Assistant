@@ -1,0 +1,1 @@
+const router = require("express").Router(); const c = require("../controllers/chatbotController"); const { requireAuth } = require("../middleware/authMiddleware"); const { actionLimiter } = require("../middleware/rateLimitMiddleware"); router.post("/message", requireAuth, actionLimiter, c.message); module.exports = router;

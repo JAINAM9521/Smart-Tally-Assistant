@@ -1,0 +1,1 @@
+const router = require("express").Router(); const { requireAuth } = require("../middleware/authMiddleware"); const { suggestLedger } = require("../services/recommendationService"); router.post("/suggest", requireAuth, (req, res) => res.json({ success: true, recommendation: suggestLedger(req.body.currentValue || "") })); module.exports = router;

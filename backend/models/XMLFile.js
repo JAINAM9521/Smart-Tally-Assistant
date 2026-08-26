@@ -1,0 +1,2 @@
+const mongoose = require("mongoose");
+module.exports = mongoose.model("XMLFile", new mongoose.Schema({ user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true }, validation: { type: mongoose.Schema.Types.ObjectId, ref: "Validation" }, fileName: String, voucherType: String, createdAt: { type: Date, default: Date.now }, totalVouchers: Number, totalTransactions: Number, totalAmount: Number, size: String, status: String, xmlContent: String }, { timestamps: true }));

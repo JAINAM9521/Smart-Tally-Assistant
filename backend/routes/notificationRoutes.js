@@ -1,0 +1,1 @@
+const router = require("express").Router(); const c = require("../controllers/notificationController"); const { requireAuth } = require("../middleware/authMiddleware"); router.get("/", requireAuth, c.list); router.put("/:id/read", requireAuth, c.read); module.exports = router;

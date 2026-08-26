@@ -1,0 +1,1 @@
+const router = require("express").Router(); const c = require("../controllers/uploadController"); const { requireAuth } = require("../middleware/authMiddleware"); router.get("/:conversionId/status", requireAuth, c.status); module.exports = router;

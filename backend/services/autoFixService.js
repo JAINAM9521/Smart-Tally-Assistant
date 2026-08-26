@@ -1,0 +1,2 @@
+const { normalizeAmount } = require("./validationService");
+exports.applySafeFixes = issues => issues.map(issue => { if (!issue.autoFixable || issue.status !== "pending") return issue; let value = issue.currentValue; if (issue.column === "AMOUNT") value = normalizeAmount(value); if (issue.column === "DATE" && /^\d{2}\/\d{2}\/\d{4}$/.test(String(value))) value = String(value).replace(/\//g, "-"); return value ? { ...issue.toObject?.() || issue, currentValue: value, status: "fixed" } : issue; });

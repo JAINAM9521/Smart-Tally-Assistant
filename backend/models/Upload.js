@@ -1,0 +1,4 @@
+const mongoose = require("mongoose");
+const schema = new mongoose.Schema({ user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true }, fileName: String, originalName: String, path: String, voucherType: String, rows: Number, columns: Number, previewRows: Array, dataRows: { type: Array, default: [] }, status: { type: String, enum: ["uploaded", "processing", "validated", "failed", "completed"], default: "uploaded" }, progress: { type: Number, default: 0 }, processedRows: { type: Number, default: 0 }, totalRows: { type: Number, default: 0 }, errors: { type: Number, default: 0 }, warnings: { type: Number, default: 0 } }, { timestamps: true });
+schema.index({ fileName: "text", voucherType: "text", status: "text" });
+module.exports = mongoose.model("Upload", schema);

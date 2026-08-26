@@ -1,0 +1,13 @@
+{
+  "info": { "name": "Smart Tally XML Assistant API", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+  "variable": [{ "key": "baseUrl", "value": "http://localhost:5000/api" }, { "key": "token", "value": "" }, { "key": "validationId", "value": "" }, { "key": "xmlId", "value": "" }],
+  "item": [
+    { "name": "Health", "request": { "method": "GET", "url": "{{baseUrl}}/health" } },
+    { "name": "Register", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"name\":\"Jainam Shah\",\"email\":\"user@example.com\",\"password\":\"Password123\",\"organization\":\"Saroj Metal\"}" }, "url": "{{baseUrl}}/auth/register" } },
+    { "name": "Login", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"email\":\"admin@smarttally.com\",\"password\":\"Demo@123\"}" }, "url": "{{baseUrl}}/auth/login" } },
+    { "name": "Validate", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": "{{baseUrl}}/validation/{{validationId}}/revalidate" } },
+    { "name": "Generate XML", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": "{{baseUrl}}/xml/generate/{{validationId}}" } },
+    { "name": "XML Preview", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": "{{baseUrl}}/xml/{{xmlId}}" } },
+    { "name": "XML Download", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": "{{baseUrl}}/xml/{{xmlId}}/download" } }
+  ]
+}

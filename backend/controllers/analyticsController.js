@@ -1,0 +1,1 @@
+const { dashboard } = require("../services/analyticsService"); exports.dashboard = async (req, res, next) => { try { res.json({ success: true, analytics: await dashboard(req.user) }); } catch (e) { next(e); } };
