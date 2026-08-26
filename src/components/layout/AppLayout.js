@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+
 import {
   BarChart3,
   Bell,
@@ -24,8 +25,18 @@ import {
 } from "lucide-react";
 
 import { read, save } from "../../lib/utils";
-import { getCurrentUser, getNotifications } from "../../lib/api";
+
+import {
+  getCurrentUser,
+  getNotifications,
+  getValidationReports,
+} from "../../lib/api";
+
 import { Chatbot } from "../chatbot/Chatbot";
+
+/* =========================================================
+   NAVIGATION
+========================================================= */
 
 const nav = [
   ["Dashboard", "/dashboard", LayoutDashboard],
@@ -39,13 +50,13 @@ const nav = [
   ["Settings", "/settings", Settings],
 ];
 
+/* =========================================================
+   LOGO
+========================================================= */
+
 function Logo() {
   return (
-    <Link
-      href="/dashboard"
-      className="app-logo"
-      aria-label="Smart Tally XML Assistant"
-    >
+    <Link href="/dashboard" className="app-logo">
       <span>
         <Zap size={16} fill="currentColor" />
       </span>
@@ -54,7 +65,11 @@ function Logo() {
   );
 }
 
-function Sidebar({ open, close, user }) {
+/* =========================================================
+   SIDEBAR
+========================================================= */
+
+function Sidebar({ open, close, user, validationReportCount }) {
   const router = useRouter();
   const current = usePathname();
 
@@ -78,7 +93,6 @@ function Sidebar({ open, close, user }) {
         <Logo />
 
         <button
-          type="button"
           className="icon-btn mobile-only"
           onClick={close}
           aria-label="Close navigation"
@@ -91,7 +105,7 @@ function Sidebar({ open, close, user }) {
 
       <div className="side-links">
         {nav.map(([name, path, Icon]) => {
-          const active =
+          const isCurrent =
             current === path ||
             (name === "Convert Excel" && current.startsWith("/convert"));
 
@@ -99,14 +113,18 @@ function Sidebar({ open, close, user }) {
             <Link
               href={path}
               onClick={close}
-              className={active ? "current" : ""}
+              className={isCurrent ? "current" : ""}
               key={name}
             >
               <Icon size={17} />
 
               {name}
 
-              {name === "Validation Reports" && <i>3</i>}
+              {name === "Validation Reports" && validationReportCount > 0 && (
+                <i>
+                  {validationReportCount > 99 ? "99+" : validationReportCount}
+                </i>
+              )}
             </Link>
           );
         })}
@@ -114,9 +132,7 @@ function Sidebar({ open, close, user }) {
 
       <div className="side-bottom">
         <Link href="/profile">
-          <span className="avatar">
-            {user?.name?.slice(0, 2).toUpperCase() || "US"}
-          </span>
+          <span className="avatar">{getInitials(user?.name)}</span>
 
           <span>
             <b>{user?.name || "User"}</b>
@@ -127,7 +143,7 @@ function Sidebar({ open, close, user }) {
           <ChevronRight size={15} />
         </Link>
 
-        <button type="button" onClick={handleLogout}>
+        <button onClick={handleLogout}>
           <LogOut size={16} />
           Log out
         </button>
@@ -136,31 +152,33 @@ function Sidebar({ open, close, user }) {
   );
 }
 
-function Header({ onMenu, theme, setTheme }) {
-  const pathname = usePathname();
+/* =========================================================
+   HEADER
+========================================================= */
 
+function Header({ onMenu, theme, setTheme }) {
   const [notifications, setNotifications] = useState(false);
 
   const [items, setItems] = useState([]);
+
+  const currentPath = usePathname();
 
   const loadNotifications = async () => {
     try {
       const response = await getNotifications();
 
-      setItems(response?.items || []);
+      const notificationItems =
+        response?.items || response?.notifications || [];
+
+      setItems(Array.isArray(notificationItems) ? notificationItems : []);
     } catch {
       setItems([]);
     }
   };
 
-  const currentPage =
-    pathname.split("/").filter(Boolean).pop()?.replaceAll("-", " ") ||
-    "dashboard";
-
   return (
     <header className="app-header">
       <button
-        type="button"
         className="icon-btn mobile-only"
         onClick={onMenu}
         aria-label="Open navigation"
@@ -173,12 +191,11 @@ function Header({ onMenu, theme, setTheme }) {
 
         <ChevronRight size={14} />
 
-        <b>{currentPage}</b>
+        <b>{getPageTitle(currentPath)}</b>
       </div>
 
       <div className="header-actions">
         <button
-          type="button"
           className="icon-btn"
           aria-label="Toggle theme"
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -188,7 +205,6 @@ function Header({ onMenu, theme, setTheme }) {
 
         <div className="notification-wrap">
           <button
-            type="button"
             className="icon-btn"
             aria-label="Open notifications"
             onClick={() => {
@@ -208,7 +224,7 @@ function Header({ onMenu, theme, setTheme }) {
 
               {items.length > 0 ? (
                 items.map((item) => (
-                  <span key={item._id}>
+                  <span key={item._id || item.id}>
                     {item.message || item.title || "Notification"}
                   </span>
                 ))
@@ -225,6 +241,10 @@ function Header({ onMenu, theme, setTheme }) {
   );
 }
 
+/* =========================================================
+   MAIN APP LAYOUT
+========================================================= */
+
 function AppLayout({ children }) {
   const [open, setOpen] = useState(false);
 
@@ -234,9 +254,15 @@ function AppLayout({ children }) {
 
   const [user, setUser] = useState(null);
 
+  const [validationReportCount, setValidationReportCount] = useState(0);
+
   const pathname = usePathname();
 
   const router = useRouter();
+
+  /* =======================================================
+     THEME
+  ======================================================= */
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -244,10 +270,14 @@ function AppLayout({ children }) {
     save("theme", theme);
   }, [theme]);
 
+  /* =======================================================
+     AUTHENTICATION
+  ======================================================= */
+
   useEffect(() => {
     let mounted = true;
 
-    const verifySession = async () => {
+    async function checkAuthentication() {
       try {
         const currentUser = await getCurrentUser();
 
@@ -267,14 +297,79 @@ function AppLayout({ children }) {
 
         router.replace("/login");
       }
-    };
+    }
 
-    verifySession();
+    checkAuthentication();
 
     return () => {
       mounted = false;
     };
   }, [pathname, router]);
+
+  /* =======================================================
+     REAL VALIDATION REPORT COUNT
+  ======================================================= */
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadValidationReportCount() {
+      try {
+        const response = await getValidationReports();
+
+        /*
+         * Support common backend response shapes:
+         *
+         * { items: [] }
+         * { reports: [] }
+         * { data: { items: [] } }
+         * []
+         */
+
+        const reports = Array.isArray(response)
+          ? response
+          : Array.isArray(response?.items)
+            ? response.items
+            : Array.isArray(response?.reports)
+              ? response.reports
+              : Array.isArray(response?.data?.items)
+                ? response.data.items
+                : [];
+
+        if (!mounted) {
+          return;
+        }
+
+        /*
+         * Count actual reports from the backend.
+         * No hardcoded number is used.
+         */
+        setValidationReportCount(reports.length);
+      } catch {
+        if (!mounted) {
+          return;
+        }
+
+        /*
+         * If reports endpoint is unavailable,
+         * don't show a fake count.
+         */
+        setValidationReportCount(0);
+      }
+    }
+
+    if (!checkingAuth) {
+      loadValidationReportCount();
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [checkingAuth, pathname]);
+
+  /* =======================================================
+     LOADING
+  ======================================================= */
 
   if (checkingAuth) {
     return (
@@ -285,9 +380,18 @@ function AppLayout({ children }) {
     );
   }
 
+  /* =======================================================
+     LAYOUT
+  ======================================================= */
+
   return (
     <div className="app-shell">
-      <Sidebar open={open} close={() => setOpen(false)} user={user} />
+      <Sidebar
+        open={open}
+        close={() => setOpen(false)}
+        user={user}
+        validationReportCount={validationReportCount}
+      />
 
       <div className="app-main">
         <Header
@@ -303,5 +407,35 @@ function AppLayout({ children }) {
     </div>
   );
 }
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function getInitials(name) {
+  if (!name) {
+    return "U";
+  }
+
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
+function getPageTitle(pathname) {
+  const title = pathname?.split("/").filter(Boolean).pop() || "dashboard";
+
+  return title
+    .replaceAll("-", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+/* =========================================================
+   EXPORTS
+========================================================= */
 
 export { Logo, Sidebar, Header, AppLayout };
