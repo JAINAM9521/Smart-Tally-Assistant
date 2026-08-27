@@ -123,6 +123,33 @@ function Conversion() {
   }, []);
 
   /* =========================================================
+     RESTORE VALIDATION STATE AFTER OPEN / REFRESH
+  ========================================================= */
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    const queryValidationId = params.get("validationId");
+
+    const validationId = queryValidationId || read("backendValidationId", null);
+
+    if (!validationId) {
+      return;
+    }
+
+    save("backendValidationId", validationId);
+
+    const storedValidation = read(
+      `backendValidationResult:${validationId}`,
+      null,
+    );
+
+    if (storedValidation) {
+      setValidation(storedValidation);
+    }
+  }, []);
+
+  /* =========================================================
      UPLOAD EXCEL
   ========================================================= */
 
@@ -180,8 +207,11 @@ function Conversion() {
 
       setValidation(result);
 
-      if (result.validationId) {
-        save("backendValidationId", result.validationId);
+      const validationId = result.validationId || result._id || null;
+
+      if (validationId) {
+        save("backendValidationId", validationId);
+        save(`backendValidationResult:${validationId}`, result);
       }
 
       go("/convert/errors");
@@ -204,6 +234,16 @@ function Conversion() {
 
       if (result) {
         setValidation(result);
+
+        const validationId =
+          result.validationId ||
+          result._id ||
+          read("backendValidationId", null);
+
+        if (validationId) {
+          save("backendValidationId", validationId);
+          save(`backendValidationResult:${validationId}`, result);
+        }
       }
 
       notify("Safe issues were auto-fixed. Revalidate before XML generation.");
@@ -233,14 +273,25 @@ function Conversion() {
         throw new Error("Backend did not return a fix result.");
       }
 
-      setValidation((current) => ({
-        ...current,
-        ...result.summary,
+      setValidation((current) => {
+        const updated = {
+          ...current,
+          ...result.summary,
 
-        issues: (current?.issues || []).map((issue) =>
-          String(issue.id) === String(issueId) ? result.updatedIssue : issue,
-        ),
-      }));
+          issues: (current?.issues || []).map((issue) =>
+            String(issue.id) === String(issueId) ? result.updatedIssue : issue,
+          ),
+        };
+
+        const validationId =
+          current?.validationId || read("backendValidationId", null);
+
+        if (validationId) {
+          save(`backendValidationResult:${validationId}`, updated);
+        }
+
+        return updated;
+      });
     } catch (error) {
       notify(error?.message || "Unable to fix this issue.");
     } finally {
@@ -263,14 +314,25 @@ function Conversion() {
     try {
       const result = await applyRecommendation(issueId);
 
-      setValidation((current) => ({
-        ...current,
-        ...result.summary,
+      setValidation((current) => {
+        const updated = {
+          ...current,
+          ...result.summary,
 
-        issues: (current?.issues || []).map((issue) =>
-          String(issue.id) === String(issueId) ? result.updatedIssue : issue,
-        ),
-      }));
+          issues: (current?.issues || []).map((issue) =>
+            String(issue.id) === String(issueId) ? result.updatedIssue : issue,
+          ),
+        };
+
+        const validationId =
+          current?.validationId || read("backendValidationId", null);
+
+        if (validationId) {
+          save(`backendValidationResult:${validationId}`, updated);
+        }
+
+        return updated;
+      });
 
       setRecommendationStatus("applied");
 
@@ -297,14 +359,25 @@ function Conversion() {
     try {
       const result = await ignoreIssue(issueId);
 
-      setValidation((current) => ({
-        ...current,
-        ...result.summary,
+      setValidation((current) => {
+        const updated = {
+          ...current,
+          ...result.summary,
 
-        issues: (current?.issues || []).map((issue) =>
-          String(issue.id) === String(issueId) ? result.updatedIssue : issue,
-        ),
-      }));
+          issues: (current?.issues || []).map((issue) =>
+            String(issue.id) === String(issueId) ? result.updatedIssue : issue,
+          ),
+        };
+
+        const validationId =
+          current?.validationId || read("backendValidationId", null);
+
+        if (validationId) {
+          save(`backendValidationResult:${validationId}`, updated);
+        }
+
+        return updated;
+      });
 
       setRecommendationStatus("ignored");
 
@@ -331,6 +404,14 @@ function Conversion() {
       }
 
       setValidation(result);
+
+      const validationId =
+        result.validationId || result._id || read("backendValidationId", null);
+
+      if (validationId) {
+        save("backendValidationId", validationId);
+        save(`backendValidationResult:${validationId}`, result);
+      }
 
       const valid =
         result.errors === 0 &&
@@ -389,6 +470,12 @@ function Conversion() {
   ========================================================= */
 
   const reset = () => {
+    const validationId = read("backendValidationId", null);
+
+    if (validationId) {
+      localStorage.removeItem(`backendValidationResult:${validationId}`);
+    }
+
     [
       "selectedVoucher",
       "backendUploadId",

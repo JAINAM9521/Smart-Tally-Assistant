@@ -1,8 +1,6 @@
 "use client";
-
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-
 import {
   ArrowRight,
   CheckCircle2,
@@ -15,7 +13,6 @@ import {
   ShieldCheck,
   Sun,
 } from "lucide-react";
-
 import {
   downloadTemplate,
   getAnalyticsDashboard,
@@ -26,15 +23,9 @@ import {
   updateProfile,
   downloadXML,
 } from "../../lib/api";
-
 import { read, save } from "../../lib/utils";
 import { Badge, PageTitle, Stat } from "../dashboard/DashboardPage";
-
 import Toast from "../ui/Toast";
-
-/* =========================================================
-   PAGE CONFIGURATION
-========================================================= */
 
 const pages = {
   "/templates": [
@@ -42,43 +33,36 @@ const pages = {
     "Standardize before you start",
     "Download clean, voucher-specific Excel formats for every accounting flow.",
   ],
-
   "/validation-reports": [
     "VALIDATION HEALTH",
     "Know what needs attention",
     "Track quality across every real validation run.",
   ],
-
   "/upload-history": [
     "FILE HISTORY",
     "Every upload, accounted for",
     "Search and review your team's real conversion activity.",
   ],
-
   "/xml-files": [
     "GENERATED OUTPUT",
     "Your Tally XML files",
     "Download and revisit compatible XML files.",
   ],
-
   "/analytics": [
     "OPERATIONS",
     "A clearer view of performance",
     "Understand throughput and quality from MongoDB.",
   ],
-
   "/help": [
     "HELP & GUIDE",
     "A smoother path to Tally",
     "Follow the complete workflow from a blank template to verified vouchers.",
   ],
-
   "/settings": [
     "PREFERENCES",
     "Make the workspace yours",
     "Control appearance and validation preferences.",
   ],
-
   "/profile": [
     "YOUR PROFILE",
     "Your profile",
@@ -86,51 +70,34 @@ const pages = {
   ],
 };
 
-/* =========================================================
-   GENERIC TABLE
-========================================================= */
-
 function GenericTable({ type }) {
   const router = useRouter();
-
   const xml = type === "/xml-files";
-
   const [query, setQuery] = useState("");
-
   const [records, setRecords] = useState([]);
-
   const [notice, setNotice] = useState("");
-
   useEffect(() => {
     const load = async () => {
       try {
         const response = xml ? await getXMLFiles() : await getUploadHistory();
-
         setRecords(response.items || []);
       } catch (error) {
         setNotice(error.message);
       }
     };
-
     load();
   }, [xml]);
-
   const visible = records.filter((record) =>
-    `${record.fileName || record.originalName || ""} ${
-      record.voucherType || ""
-    } ${record.status || ""}`
+    `${record.fileName || record.originalName || ""} ${record.voucherType || ""} ${record.status || ""}`
       .toLowerCase()
       .includes(query.toLowerCase()),
   );
-
   return (
     <section className="panel full-panel">
       <Toast message={notice} onClose={() => setNotice("")} />
-
       <div className="toolbar">
         <div className="search">
           <Search size={16} />
-
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -138,43 +105,31 @@ function GenericTable({ type }) {
           />
         </div>
       </div>
-
       <div className="app-table">
         <div className="table-row head">
           <span>FILE NAME</span>
-
           <span>VOUCHER TYPE</span>
-
           <span>CREATED DATE</span>
-
           <span>{xml ? "VOUCHERS" : "ROWS"}</span>
-
           <span>STATUS</span>
-
           <span>ACTIONS</span>
         </div>
-
         {visible.length ? (
           visible.map((record) => (
             <div className="table-row" key={record._id}>
               <b>
                 <FileSpreadsheet size={16} />
-
                 {record.fileName || record.originalName}
               </b>
-
               <span>{record.voucherType || "—"}</span>
-
               <span>
                 {record.createdAt
                   ? new Date(record.createdAt).toLocaleDateString()
                   : "—"}
               </span>
-
               <span>
                 {record.totalVouchers || record.totalRows || record.rows || 0}
               </span>
-
               <Badge
                 tone={
                   record.status === "validated" || record.status === "Ready"
@@ -184,24 +139,19 @@ function GenericTable({ type }) {
               >
                 {record.status || "—"}
               </Badge>
-
               <span className="row-actions">
                 {xml && (
                   <>
                     <button
-                      type="button"
                       aria-label="Preview XML"
                       onClick={() => {
                         save("selectedXmlFileId", record._id);
-
                         router.push("/convert/xml-preview");
                       }}
                     >
                       <Eye size={16} />
                     </button>
-
                     <button
-                      type="button"
                       aria-label="Download XML"
                       onClick={async () => {
                         try {
@@ -221,9 +171,7 @@ function GenericTable({ type }) {
         ) : (
           <div className="empty-state">
             <Search size={24} />
-
             <b>No records yet</b>
-
             <small>
               Real MongoDB-backed records will appear here after you use the
               conversion workflow.
@@ -235,82 +183,61 @@ function GenericTable({ type }) {
   );
 }
 
-/* =========================================================
-   VALIDATION REPORTS
-========================================================= */
-
 function ReportContent() {
   const router = useRouter();
 
   const [reports, setReports] = useState([]);
-
   const [error, setError] = useState("");
 
   useEffect(() => {
     getValidationReports()
-      .then((response) => {
-        setReports(response.items || []);
-      })
-      .catch((e) => {
-        setError(e.message);
-      });
+      .then((r) => setReports(r.items || []))
+      .catch((e) => setError(e.message));
   }, []);
 
-  const openReport = (report) => {
-    /*
-     * The current active validation ID is stored by
-     * the real conversion workflow.
-     *
-     * When it exists, return to the actual Fix screen.
-     */
-    const activeValidationId = read("backendValidationId", null);
+  const openReport = () => {
+    const validationId = read(
+      "backendValidationId",
+      null,
+    );
 
-    if (activeValidationId) {
-      router.push("/convert/errors");
-
+    if (!validationId) {
+      setError(
+        "No active validation run is available. Run validation again to open the detailed issues.",
+      );
       return;
     }
 
-    /*
-     * Historical reports do not currently have a
-     * dedicated frontend detail endpoint in api.js.
-     * Never show fake issue details.
-     */
-    setError(
-      "This is a historical validation report. Open the active conversion run to review and fix its issues.",
+    const storedValidation = read(
+      `backendValidationResult:${validationId}`,
+      null,
+    );
+
+    if (!storedValidation) {
+      setError(
+        "The detailed validation result is not available in this browser session. Run validation again to reopen its issues.",
+      );
+      return;
+    }
+
+    router.push(
+      `/convert/errors?validationId=${encodeURIComponent(
+        validationId,
+      )}`,
     );
   };
 
-  if (!reports.length) {
-    return (
-      <div className="empty-state panel">
-        <ShieldCheck size={24} />
-
-        <b>{error || "No validation reports yet"}</b>
-
-        <small>Complete a real conversion to generate reports.</small>
-      </div>
-    );
-  }
-
-  return (
+  return reports.length ? (
     <div className="panel full-panel">
       <div className="panel-head">
         <div>
           <span className="eyebrow">VALIDATION REPORTS</span>
-
           <h2>Real validation history</h2>
         </div>
       </div>
 
       {error && (
-        <div
-          className="toast"
-          role="status"
-          style={{
-            marginBottom: "16px",
-          }}
-        >
+        <div className="toast" role="status">
           {error}
         </div>
       )}
@@ -318,37 +245,27 @@ function ReportContent() {
       <div className="app-table">
         <div className="table-row head">
           <span>FILE</span>
-
           <span>SCORE</span>
-
           <span>ERRORS</span>
-
           <span>WARNINGS</span>
-
           <span>STATUS</span>
-
           <span>ACTIONS</span>
         </div>
 
-        {reports.map((report) => (
-          <div className="table-row" key={report._id}>
-            <b>{report.fileName || "Upload"}</b>
-
-            <span>{report.score ?? 0}%</span>
-
-            <span>{report.errors ?? 0}</span>
-
-            <span>{report.warnings ?? 0}</span>
-
-            <Badge tone={report.errors ? "danger" : "success"}>
-              {report.status || "—"}
+        {reports.map((r) => (
+          <div className="table-row" key={r._id}>
+            <b>{r.fileName || "Upload"}</b>
+            <span>{r.score ?? 0}%</span>
+            <span>{r.errors ?? 0}</span>
+            <span>{r.warnings ?? 0}</span>
+            <Badge tone={r.errors ? "danger" : "success"}>
+              {r.status}
             </Badge>
-
             <span className="row-actions">
               <button
                 type="button"
                 className="table-fix"
-                onClick={() => openReport(report)}
+                onClick={openReport}
               >
                 Open
               </button>
@@ -357,30 +274,27 @@ function ReportContent() {
         ))}
       </div>
     </div>
+  ) : (
+    <div className="empty-state panel">
+      <ShieldCheck size={24} />
+      <b>{error || "No validation reports yet"}</b>
+      <small>Complete a real conversion to generate reports.</small>
+    </div>
   );
 }
 
-/* =========================================================
-   ANALYTICS
-========================================================= */
-
 function AnalyticsContent() {
   const [analytics, setAnalytics] = useState(null);
-
   const [error, setError] = useState("");
-
   useEffect(() => {
     getAnalyticsDashboard()
       .then((r) => setAnalytics(r.analytics))
       .catch((e) => setError(e.message));
   }, []);
-
-  if (!analytics) {
+  if (!analytics)
     return (
       <div className="empty-state panel">{error || "Loading analytics..."}</div>
     );
-  }
-
   return (
     <div className="stat-grid">
       <Stat
@@ -388,21 +302,18 @@ function AnalyticsContent() {
         label="Files processed"
         note="MongoDB"
       />
-
       <Stat
         value={analytics.successfulConversions ?? "—"}
         label="Successful conversions"
         note="MongoDB"
         tone="green"
       />
-
       <Stat
         value={analytics.totalVouchers ?? "—"}
         label="Total vouchers"
         note="MongoDB"
         tone="purple"
       />
-
       <Stat
         value={
           analytics.validationSuccessRate != null
@@ -417,10 +328,6 @@ function AnalyticsContent() {
   );
 }
 
-/* =========================================================
-   HELP
-========================================================= */
-
 function Help() {
   return (
     <>
@@ -429,7 +336,6 @@ function Help() {
         title="A smoother path to Tally"
         description="Follow the complete real workflow."
       />
-
       <div className="guide-layout">
         <div className="guide-list">
           {[
@@ -444,39 +350,31 @@ function Help() {
             "Generate XML",
             "Preview & download",
             "Import into Tally",
-          ].map((item, index) => (
-            <div key={item}>
-              <span>{String(index + 1).padStart(2, "0")}</span>
-
-              <b>{item}</b>
-
+          ].map((x, i) => (
+            <div key={x}>
+              <span>{String(i + 1).padStart(2, "0")}</span>
+              <b>{x}</b>
               <CheckCircle2 size={16} />
             </div>
           ))}
         </div>
-
         <div className="panel tally-guide">
           <div className="tally-guide-icon">
             <Database />
           </div>
-
           <span className="eyebrow">TALLY PRIME IMPORT</span>
-
           <h2>
             Verified data,
             <br />
             <em>right where it belongs.</em>
           </h2>
-
           <div className="tally-flow">
             {["Smart Tally", "XML file", "Tally Prime", "Verify vouchers"].map(
-              (item, index) => (
-                <div key={item}>
-                  <span>{index + 1}</span>
-
-                  {item}
-
-                  {index < 3 && <ArrowRight size={15} />}
+              (x, i) => (
+                <div key={x}>
+                  <span>{i + 1}</span>
+                  {x}
+                  {i < 3 && <ArrowRight size={15} />}
                 </div>
               ),
             )}
@@ -487,13 +385,8 @@ function Help() {
   );
 }
 
-/* =========================================================
-   SETTINGS
-========================================================= */
-
 function SettingsPage() {
   const [dark, setDark] = useState(() => read("theme", "light") === "dark");
-
   const [settings, setSettings] = useState(() =>
     read("settings", {
       strictValidation: true,
@@ -502,26 +395,18 @@ function SettingsPage() {
       ledgerMatching: true,
     }),
   );
-
   const toggle = (key) =>
     setSettings((previous) => {
-      const next = {
-        ...previous,
-        [key]: !previous[key],
-      };
-
+      const next = { ...previous, [key]: !previous[key] };
       save("settings", next);
-
       return next;
     });
-
   const fields = [
     ["Strict Validation", "strictValidation"],
     ["Duplicate Detection", "duplicateDetection"],
     ["GST Validation", "gstValidation"],
     ["Ledger Matching", "ledgerMatching"],
   ];
-
   return (
     <>
       <PageTitle
@@ -529,37 +414,27 @@ function SettingsPage() {
         title="Make the workspace yours"
         description="Appearance and UI preferences are stored locally; accounting data is not."
       />
-
       <div className="settings-grid">
         <section className="panel settings-card">
           <span className="eyebrow">APPEARANCE</span>
-
           <h3>Choose your mode</h3>
-
           <div className="theme-choice">
             <button
-              type="button"
               className={!dark ? "chosen" : ""}
               onClick={() => {
                 setDark(false);
-
                 document.documentElement.dataset.theme = "light";
-
                 save("theme", "light");
               }}
             >
               <Sun size={17} />
               Light
             </button>
-
             <button
-              type="button"
               className={dark ? "chosen" : ""}
               onClick={() => {
                 setDark(true);
-
                 document.documentElement.dataset.theme = "dark";
-
                 save("theme", "dark");
               }}
             >
@@ -568,22 +443,17 @@ function SettingsPage() {
             </button>
           </div>
         </section>
-
         <section className="panel settings-card">
           <span className="eyebrow">VALIDATION PREFERENCES</span>
-
           <h3>Keep checks thorough</h3>
-
           {fields.map(([label, key]) => (
             <label className="toggle-row" key={key}>
               {label}
-
               <input
                 type="checkbox"
                 checked={Boolean(settings[key])}
                 onChange={() => toggle(key)}
               />
-
               <span />
             </label>
           ))}
@@ -593,27 +463,15 @@ function SettingsPage() {
   );
 }
 
-/* =========================================================
-   PROFILE
-========================================================= */
-
 function Profile() {
   const [user, setUser] = useState(null);
-
   const [editing, setEditing] = useState(false);
-
-  const [form, setForm] = useState({
-    name: "",
-    organization: "",
-  });
-
+  const [form, setForm] = useState({ name: "", organization: "" });
   const [notice, setNotice] = useState("");
-
   useEffect(() => {
     getProfile()
       .then((r) => {
         setUser(r.user);
-
         setForm({
           name: r.user.name || "",
           organization: r.user.organization || "",
@@ -621,100 +479,66 @@ function Profile() {
       })
       .catch((e) => setNotice(e.message));
   }, []);
-
   const saveProfile = async () => {
     try {
       const r = await updateProfile(form);
-
       setUser(r.user);
-
       setEditing(false);
-
       setNotice("Profile updated successfully.");
     } catch (e) {
       setNotice(e.message);
     }
   };
-
-  if (!user) {
+  if (!user)
     return (
       <div className="empty-state panel">{notice || "Loading profile..."}</div>
     );
-  }
-
   return (
     <>
       <PageTitle
         eyebrow="YOUR PROFILE"
         title={user.name}
-        description={`${user.role} at ${
-          user.organization || "your organization"
-        }`}
+        description={`${user.role} at ${user.organization || "your organization"}`}
       />
-
       <div className="profile-card panel">
         <div className="profile-avatar">
           {user.name?.slice(0, 2).toUpperCase()}
         </div>
-
         <div>
           <h2>{user.name}</h2>
-
           <p>{user.email}</p>
-
           <Badge>{user.role}</Badge>
         </div>
-
         <button
-          type="button"
           className="btn btn-secondary"
           onClick={() => setEditing(!editing)}
         >
-          {editing ? "Close editor" : "Edit profile"}
-
-          <ArrowRight size={15} />
+          {editing ? "Close editor" : "Edit profile"} <ArrowRight size={15} />
         </button>
       </div>
-
       {editing && (
         <div className="panel profile-editor">
           <label>
             Name
             <input
               value={form.name}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  name: e.target.value,
-                })
-              }
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
             />
           </label>
-
           <label>
             Organization
             <input
               value={form.organization}
               onChange={(e) =>
-                setForm({
-                  ...form,
-                  organization: e.target.value,
-                })
+                setForm({ ...form, organization: e.target.value })
               }
             />
           </label>
-
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={saveProfile}
-          >
-            Save profile
-            <CheckCircle2 size={15} />
+          <button className="btn btn-primary" onClick={saveProfile}>
+            Save profile <CheckCircle2 size={15} />
           </button>
         </div>
       )}
-
       {notice && (
         <div className="toast" role="status">
           {notice}
@@ -724,51 +548,31 @@ function Profile() {
   );
 }
 
-/* =========================================================
-   MAIN DATA PAGE
-========================================================= */
-
 function DataPage({ type }) {
-  const [eyebrow, title, description] = pages[type] || pages["/templates"];
-
-  if (type === "/help") {
-    return <Help />;
-  }
-
-  if (type === "/settings") {
-    return <SettingsPage />;
-  }
-
-  if (type === "/profile") {
-    return <Profile />;
-  }
-
-  if (type === "/validation-reports") {
+  const [ey, title, desc] = pages[type] || pages["/templates"];
+  if (type === "/help") return <Help />;
+  if (type === "/settings") return <SettingsPage />;
+  if (type === "/profile") return <Profile />;
+  if (type === "/validation-reports")
     return (
       <>
-        <PageTitle eyebrow={eyebrow} title={title} description={description} />
-
+        <PageTitle eyebrow={ey} title={title} description={desc} />
         <ReportContent />
       </>
     );
-  }
-
-  if (type === "/analytics") {
+  if (type === "/analytics")
     return (
       <>
-        <PageTitle eyebrow={eyebrow} title={title} description={description} />
-
+        <PageTitle eyebrow={ey} title={title} description={desc} />
         <AnalyticsContent />
       </>
     );
-  }
-
   return (
     <>
       <PageTitle
-        eyebrow={eyebrow}
+        eyebrow={ey}
         title={title}
-        description={description}
+        description={desc}
         action={
           type === "/templates" ? (
             <div className="voucher-template-actions">
@@ -781,26 +585,22 @@ function DataPage({ type }) {
                 "Journal",
                 "Credit Note",
                 "Debit Note",
-              ].map((voucher) => (
+              ].map((v) => (
                 <button
-                  type="button"
-                  key={voucher}
+                  key={v}
                   className="btn btn-secondary"
-                  onClick={() => downloadTemplate(voucher)}
+                  onClick={() => downloadTemplate(v)}
                 >
                   <Download size={15} />
-
-                  {voucher}
+                  {v}
                 </button>
               ))}
             </div>
           ) : null
         }
       />
-
       <GenericTable type={type} />
     </>
   );
 }
-
 export { DataPage };
