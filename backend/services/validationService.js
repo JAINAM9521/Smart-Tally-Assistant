@@ -2,10 +2,6 @@
 
 const Fuse = require("fuse.js");
 
-/* =========================================================
-   TALLY LEDGERS
-========================================================= */
-
 const ledgers = [
   "Sales A/c",
   "Purchase A/c",
@@ -16,15 +12,7 @@ const ledgers = [
   "Output SGST A/c",
 ];
 
-/* =========================================================
-   REQUIRED COLUMNS
-========================================================= */
-
 const required = ["DATE", "BY-DR", "TO-CR", "AMOUNT", "VOUCHER NO."];
-
-/* =========================================================
-   SUPPORTED VOUCHER TYPES
-========================================================= */
 
 const supportedVoucherTypes = [
   "Sales",
@@ -36,10 +24,6 @@ const supportedVoucherTypes = [
   "Credit Note",
   "Debit Note",
 ];
-
-/* =========================================================
-   ISSUE HELPER
-========================================================= */
 
 function issue(
   row,
@@ -63,93 +47,49 @@ function issue(
   };
 }
 
-/* =========================================================
-   NORMALIZE AMOUNT
-========================================================= */
-
-/*
- * Examples:
- *
- * 10000       -> "10000"
- * 10000.50    -> "10000.5"
- * 10,000      -> "10000"
- * ₹10,000     -> "10000"
- * $10,000     -> "10000"
- * 10 000      -> "10000"
- */
-
 function normalizeAmount(value) {
-  const text = String(value ?? "").trim();
+  const text = String(value ?? "")
+    .trim()
+    .replace(/[₹$€£,\s]/g, "");
 
-  if (!text) {
-    return null;
-  }
+  if (!text || !/^\d+(?:\.\d+)?$/.test(text)) return null;
 
-  const cleaned = text.replace(/[₹$€£,\s]/g, "");
-
-  if (!/^\d+(?:\.\d+)?$/.test(cleaned)) {
-    return null;
-  }
-
-  const number = Number(cleaned);
-
-  if (!Number.isFinite(number)) {
-    return null;
-  }
-
-  return String(number);
+  const number = Number(text);
+  return Number.isFinite(number) && number >= 0 ? String(number) : null;
 }
 
-/* =========================================================
-   DATE VALIDATION
-========================================================= */
-
-/*
- * Valid format:
- *
- * DD-MM-YYYY
- */
+function isValidCalendarDate(day, month, year) {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
 
 function validDate(value) {
-  return /^\d{2}-\d{2}-\d{4}$/.test(String(value ?? "").trim());
+  const text = String(value ?? "").trim();
+  const match = text.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!match) return false;
+  return isValidCalendarDate(
+    Number(match[1]),
+    Number(match[2]),
+    Number(match[3]),
+  );
 }
-
-/* =========================================================
-   DATE NORMALIZATION
-========================================================= */
-
-/*
- * Examples:
- *
- * 26/08/2026 -> 26-08-2026
- * 26.08.2026 -> 26-08-2026
- * 6/8/2026   -> 06-08-2026
- */
 
 function normalizeDate(value) {
   const raw = String(value ?? "").trim();
-
-  if (!raw) {
-    return null;
-  }
+  if (!raw) return null;
 
   const match = raw.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
-
-  if (!match) {
-    return null;
-  }
+  if (!match) return null;
 
   const day = Number(match[1]);
   const month = Number(match[2]);
-  const year = match[3];
+  const year = Number(match[3]);
 
-  if (day < 1 || day > 31) {
-    return null;
-  }
-
-  if (month < 1 || month > 12) {
-    return null;
-  }
+  if (!isValidCalendarDate(day, month, year)) return null;
 
   return `${String(day).padStart(2, "0")}-${String(month).padStart(
     2,
@@ -157,65 +97,25 @@ function normalizeDate(value) {
   )}-${year}`;
 }
 
-/* =========================================================
-   LEDGER NORMALIZATION
-========================================================= */
-
-/*
- * This is important for Excel data.
- *
- * It handles:
- *
- * Sales A/c
- * Sales  A/c
- * Sales A/c
- * Sales A/c
- * Sales A/c
- *
- * All of them become comparable.
- */
-
 function normalizeLedger(value) {
   return String(value ?? "")
     .replace(/\u00A0/g, " ")
+    .replace(/\u200B/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
 }
 
-/* =========================================================
-   FIND EXACT CANONICAL LEDGER
-========================================================= */
-
 function findCanonicalLedger(value) {
   const normalized = normalizeLedger(value);
-
-  if (!normalized) {
-    return null;
-  }
-
+  if (!normalized) return null;
   return (
     ledgers.find((ledger) => normalizeLedger(ledger) === normalized) || null
   );
 }
 
-/* =========================================================
-   VALIDATE ROWS
-========================================================= */
-
-exports.validateRows = (rows, voucherType) => {
+function validateRows(rows, voucherType) {
   const issues = [];
-
-  const invoiceSeen = new Map();
-
-  const fuse = new Fuse(ledgers, {
-    includeScore: true,
-    threshold: 0.45,
-  });
-
-  /* =======================================================
-     INVALID DATA
-  ======================================================= */
 
   if (!Array.isArray(rows)) {
     return [
@@ -231,20 +131,28 @@ exports.validateRows = (rows, voucherType) => {
     ];
   }
 
-  /* =======================================================
-     PROCESS EACH ROW
-  ======================================================= */
+  if (!supportedVoucherTypes.includes(String(voucherType || ""))) {
+    issues.push(
+      issue(
+        2,
+        "VOUCHER TYPE",
+        voucherType || "",
+        "Invalid voucher type",
+        "error",
+        "Select a supported voucher type.",
+        false,
+      ),
+    );
+  }
+
+  const invoiceSeen = new Map();
+  const fuse = new Fuse(ledgers, { includeScore: true, threshold: 0.45 });
 
   rows.forEach((row, index) => {
     const rowNumber = index + 2;
 
-    /* =====================================================
-       REQUIRED FIELDS
-    ===================================================== */
-
-    required.forEach((column) => {
+    for (const column of required) {
       const value = String(row?.[column] ?? "").trim();
-
       if (!value) {
         issues.push(
           issue(
@@ -258,16 +166,10 @@ exports.validateRows = (rows, voucherType) => {
           ),
         );
       }
-    });
-
-    /* =====================================================
-       AMOUNT
-    ===================================================== */
+    }
 
     const rawAmount = row?.AMOUNT;
-
     const amount = normalizeAmount(rawAmount);
-
     if (!amount) {
       issues.push(
         issue(
@@ -277,7 +179,7 @@ exports.validateRows = (rows, voucherType) => {
           "Invalid amount format",
           "error",
           "Use a numeric value such as 10000.",
-          true,
+          false,
         ),
       );
     } else if (String(rawAmount ?? "").trim() !== amount) {
@@ -294,52 +196,27 @@ exports.validateRows = (rows, voucherType) => {
       );
     }
 
-    /* =====================================================
-       DATE
-    ===================================================== */
-
     const rawDate = row?.DATE;
-
-    if (String(rawDate ?? "").trim()) {
-      if (!validDate(rawDate)) {
-        const normalizedDate = normalizeDate(rawDate);
-
-        issues.push(
-          issue(
-            rowNumber,
-            "DATE",
-            rawDate,
-            "Invalid date format",
-            "error",
-            normalizedDate ? `Use ${normalizedDate}.` : "Use DD-MM-YYYY.",
-            Boolean(normalizedDate),
-          ),
-        );
-      }
+    const dateText = String(rawDate ?? "").trim();
+    if (dateText && !validDate(dateText)) {
+      const normalizedDate = normalizeDate(rawDate);
+      issues.push(
+        issue(
+          rowNumber,
+          "DATE",
+          rawDate,
+          "Invalid date format",
+          "error",
+          normalizedDate ? `Use ${normalizedDate}.` : "Use DD-MM-YYYY.",
+          Boolean(normalizedDate),
+        ),
+      );
     }
 
-    /* =====================================================
-       TO-CR LEDGER
-    ===================================================== */
-
     const ledger = String(row?.["TO-CR"] ?? "").trim();
-
-    /*
-     * Check normalized value against
-     * canonical Tally ledger names.
-     */
-
     const canonicalLedger = findCanonicalLedger(ledger);
-
     if (ledger && !canonicalLedger) {
-      /*
-       * If it doesn't exactly match after
-       * normalization, find the closest
-       * ledger using Fuse.
-       */
-
       const match = fuse.search(ledger)[0];
-
       issues.push(
         issue(
           rowNumber,
@@ -353,12 +230,7 @@ exports.validateRows = (rows, voucherType) => {
       );
     }
 
-    /* =====================================================
-       VOUCHER NUMBER
-    ===================================================== */
-
     const voucher = String(row?.["VOUCHER NO."] ?? "").trim();
-
     if (voucher) {
       if (invoiceSeen.has(voucher)) {
         issues.push(
@@ -377,14 +249,9 @@ exports.validateRows = (rows, voucherType) => {
       }
     }
 
-    /* =====================================================
-       GSTIN
-    ===================================================== */
-
     const gstin = String(row?.GSTIN ?? "")
       .trim()
       .toUpperCase();
-
     if (gstin && !/^[0-9A-Z]{15}$/.test(gstin)) {
       issues.push(
         issue(
@@ -399,12 +266,7 @@ exports.validateRows = (rows, voucherType) => {
       );
     }
 
-    /* =====================================================
-       REFERENCE NUMBER
-    ===================================================== */
-
     const referenceNumber = String(row?.["REFERENCE NO."] ?? "").trim();
-
     if (!referenceNumber) {
       issues.push(
         issue(
@@ -418,117 +280,45 @@ exports.validateRows = (rows, voucherType) => {
         ),
       );
     }
-
-    /* =====================================================
-       VOUCHER TYPE
-    ===================================================== */
-
-    if (voucherType && !supportedVoucherTypes.includes(voucherType)) {
-      issues.push(
-        issue(
-          rowNumber,
-          "VOUCHER TYPE",
-          voucherType,
-          "Invalid voucher type",
-          "error",
-          "Select a supported voucher type.",
-          false,
-        ),
-      );
-    }
   });
 
   return issues;
-};
+}
 
-/* =========================================================
-   SUMMARY
-========================================================= */
-
-/*
- * ERROR   = blocking issue
- * WARNING = non-blocking issue
- *
- * Only pending errors are counted in `errors`.
- */
-
-exports.summary = (issues, totalRows) => {
+function summary(issues, totalRows) {
   const allIssues = Array.isArray(issues) ? issues : [];
-
   const pending = allIssues.filter((item) => item.status === "pending");
-
   const fixed = allIssues.filter((item) => item.status === "fixed");
-
   const ignored = allIssues.filter((item) => item.status === "ignored");
-
   const errors = pending.filter((item) => item.severity === "error");
-
   const warnings = pending.filter((item) => item.severity === "warning");
 
-  /* =======================================================
-     SCORE
-  ======================================================= */
-
-  const score =
-    !allIssues.length || !pending.length
-      ? 100
-      : Math.max(94, 100 - Math.round((pending.length / allIssues.length) * 6));
-
-  /* =======================================================
-     RETURN SUMMARY
-  ======================================================= */
+  const checked = Math.max(0, Number(totalRows) || 0);
+  const errorRows = new Set(errors.map((item) => Number(item.row)));
+  const valid = Math.max(0, checked - errorRows.size);
+  const score = checked === 0 ? 0 : Math.round((valid / checked) * 100);
 
   return {
     score,
-
-    checked: Number(totalRows) || 0,
-
-    /*
-     * Rows without blocking errors.
-     */
-    valid: (Number(totalRows) || 0) - errors.length,
-
-    /*
-     * Blocking errors only.
-     */
+    checked,
+    valid,
     errors: errors.length,
-
-    /*
-     * Non-blocking warnings.
-     */
     warnings: warnings.length,
-
-    /*
-     * Successfully fixed issues.
-     */
     fixed: fixed.length,
-
-    /*
-     * Issues still waiting for action.
-     */
     pending: pending.length,
-
-    /*
-     * Ignored issues.
-     */
     ignored: ignored.length,
   };
+}
+
+module.exports = {
+  ledgers,
+  required,
+  supportedVoucherTypes,
+  validateRows,
+  summary,
+  normalizeAmount,
+  validDate,
+  normalizeDate,
+  normalizeLedger,
+  findCanonicalLedger,
 };
-
-/* =========================================================
-   EXPORT HELPERS
-========================================================= */
-
-exports.normalizeAmount = normalizeAmount;
-
-exports.normalizeDate = normalizeDate;
-
-exports.validDate = validDate;
-
-exports.normalizeLedger = normalizeLedger;
-
-exports.findCanonicalLedger = findCanonicalLedger;
-
-exports.supportedVoucherTypes = supportedVoucherTypes;
-
-exports.ledgers = ledgers;

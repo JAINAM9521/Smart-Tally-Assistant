@@ -413,10 +413,7 @@ function Conversion() {
         save(`backendValidationResult:${validationId}`, result);
       }
 
-      const valid =
-        result.errors === 0 &&
-        result.score === 100 &&
-        result.status === "validated";
+      const valid = result.errors === 0 && result.status === "validated";
 
       notify(
         valid
@@ -438,7 +435,6 @@ function Conversion() {
     const valid =
       validation &&
       validation.errors === 0 &&
-      validation.score === 100 &&
       validation.status === "validated";
 
     if (!valid) {
@@ -958,10 +954,7 @@ function ErrorView({
     (issue) => filter === "All" || issue.status === filter.toLowerCase(),
   );
 
-  const valid =
-    validation?.status === "validated" &&
-    validation?.errors === 0 &&
-    validation?.score === 100;
+  const valid = validation?.status === "validated" && validation?.errors === 0;
 
   const recommendedIssue = issues.find(
     (issue) => issue.status === "pending" && issue.recommendation,
@@ -983,7 +976,7 @@ function ErrorView({
         <Stat
           value={pending.length}
           label="Pending"
-          note="Blocking/manual review"
+          note="Needs attention"
           tone="red"
         />
 

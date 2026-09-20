@@ -55,16 +55,6 @@ const getDataRowIndex = (issueRow, dataRows) => {
     return primaryIndex;
   }
 
-  /*
-   * Fallback in case a validation service
-   * returns a one-based row index.
-   */
-  const fallbackIndex = excelRow - 1;
-
-  if (fallbackIndex >= 0 && fallbackIndex < dataRows.length) {
-    return fallbackIndex;
-  }
-
   return -1;
 };
 
@@ -417,10 +407,8 @@ exports.validate = async (req, res, next) => {
     });
 
     upload.errors = stats.errors;
-
     upload.warnings = stats.warnings;
-
-    upload.status = "validated";
+    upload.status = stats.errors > 0 ? "failed" : "validated";
 
     await upload.save();
 
@@ -479,12 +467,7 @@ exports.autoFix = async (req, res, next) => {
   try {
     const validation = await Validation.findOne({
       _id: req.params.validationId,
-
-      ...(req.user.role === "admin"
-        ? {}
-        : {
-            user: req.user._id,
-          }),
+      ...(req.user.role === "admin" ? {} : { user: req.user._id }),
     });
 
     if (!validation) {
@@ -497,12 +480,7 @@ exports.autoFix = async (req, res, next) => {
 
     const upload = await Upload.findOne({
       _id: validation.upload,
-
-      ...(req.user.role === "admin"
-        ? {}
-        : {
-            user: req.user._id,
-          }),
+      ...(req.user.role === "admin" ? {} : { user: req.user._id }),
     });
 
     if (!upload) {
@@ -522,10 +500,20 @@ exports.autoFix = async (req, res, next) => {
 
     /* =====================================================
        STEP 2
-       Apply fixes to actual Upload.dataRows
+       Apply every accepted fix to a plain copy of the
+       actual source rows.
+
+       IMPORTANT:
+       We intentionally persist the complete dataRows array
+       with an explicit MongoDB $set instead of relying only
+       on Mongoose nested-array change tracking.
     ===================================================== */
 
-    let uploadChanged = false;
+    const dataRows = JSON.parse(
+      JSON.stringify(Array.isArray(upload.dataRows) ? upload.dataRows : []),
+    );
+
+    const appliedChanges = [];
 
     if (Array.isArray(validation.issues)) {
       for (const issue of validation.issues) {
@@ -533,17 +521,15 @@ exports.autoFix = async (req, res, next) => {
           continue;
         }
 
-        const result = applyIssueToUpload(upload, issue);
+        const result = applyIssueToUpload({ dataRows }, issue);
 
         if (result.changed) {
-          uploadChanged = true;
+          appliedChanges.push({
+            row: Number(issue.row),
+            column: String(issue.column || "").trim(),
+            value: result.value,
+          });
         } else {
-          /*
-           * If the actual data could not be
-           * changed, do NOT leave the issue
-           * falsely marked as fixed.
-           */
-
           issue.status = "pending";
 
           if (result.message) {
@@ -555,38 +541,91 @@ exports.autoFix = async (req, res, next) => {
 
     /* =====================================================
        STEP 3
-       Explicitly mark nested dataRows as modified
+       Persist the complete source data explicitly.
     ===================================================== */
 
-    if (uploadChanged) {
-      upload.markModified("dataRows");
+    if (appliedChanges.length > 0) {
+      const updateResult = await Upload.updateOne(
+        { _id: upload._id },
+        {
+          $set: {
+            dataRows,
+          },
+        },
+      );
 
-      await upload.save();
+      if (updateResult.matchedCount !== 1) {
+        throw new Error("Unable to persist Auto Fix changes to the upload.");
+      }
+
+      /* ===================================================
+         STEP 4
+         Reload from MongoDB and verify that every applied
+         change really exists in the saved source data.
+      =================================================== */
+
+      const savedUpload = await Upload.findById(upload._id).lean();
+
+      if (!savedUpload || !Array.isArray(savedUpload.dataRows)) {
+        throw new Error("Unable to reload the updated upload data.");
+      }
+
+      for (const change of appliedChanges) {
+        const rowIndex = getDataRowIndex(change.row, savedUpload.dataRows);
+
+        const savedRow = rowIndex >= 0 ? savedUpload.dataRows[rowIndex] : null;
+
+        const savedValue = savedRow?.[change.column];
+
+        if (String(savedValue ?? "") !== String(change.value ?? "")) {
+          const issue = validation.issues.find(
+            (item) =>
+              Number(item.row) === change.row &&
+              String(item.column || "").trim() === change.column &&
+              item.status === "fixed",
+          );
+
+          if (issue) {
+            issue.status = "pending";
+            issue.recommendation =
+              "The suggested fix could not be confirmed in the saved upload data.";
+          }
+        }
+      }
     }
 
     /* =====================================================
-       STEP 4
-       Recalculate validation summary
+       STEP 5
+       Re-read the upload after persistence so all subsequent
+       logic works with the exact MongoDB state.
     ===================================================== */
 
-    validation.checked = upload.rows;
+    const freshUpload = await Upload.findById(upload._id);
+
+    if (!freshUpload) {
+      throw new Error("Updated upload could not be reloaded.");
+    }
+
+    validation.checked = freshUpload.rows;
 
     const stats = await report(validation);
 
     await validation.save();
 
+    freshUpload.errors = stats.errors;
+    freshUpload.warnings = stats.warnings;
+    freshUpload.status = stats.errors > 0 ? "failed" : "validated";
+    await freshUpload.save();
+
     return res.json({
       success: true,
-
       ...stats,
-
       issues: validation.issues,
     });
   } catch (error) {
     next(error);
   }
 };
-
 /* =========================================================
    FIX INDIVIDUAL ISSUE
 ========================================================= */
@@ -689,6 +728,11 @@ exports.fixIssue = async (req, res, next) => {
 
     await validation.save();
 
+    upload.errors = stats.errors;
+    upload.warnings = stats.warnings;
+    upload.status = stats.errors > 0 ? "failed" : "validated";
+    await upload.save();
+
     return res.json({
       success: true,
 
@@ -785,12 +829,7 @@ exports.revalidate = async (req, res, next) => {
   try {
     const validation = await Validation.findOne({
       _id: req.params.validationId,
-
-      ...(req.user.role === "admin"
-        ? {}
-        : {
-            user: req.user._id,
-          }),
+      ...(req.user.role === "admin" ? {} : { user: req.user._id }),
     });
 
     if (!validation) {
@@ -802,17 +841,12 @@ exports.revalidate = async (req, res, next) => {
     }
 
     /* =====================================================
-       LOAD ACTUAL UPLOAD
+       LOAD THE CURRENT SOURCE DATA DIRECTLY FROM MONGODB
     ===================================================== */
 
     const upload = await Upload.findOne({
       _id: validation.upload,
-
-      ...(req.user.role === "admin"
-        ? {}
-        : {
-            user: req.user._id,
-          }),
+      ...(req.user.role === "admin" ? {} : { user: req.user._id }),
     });
 
     if (!upload) {
@@ -824,13 +858,20 @@ exports.revalidate = async (req, res, next) => {
     }
 
     /* =====================================================
-       VALIDATE ACTUAL SAVED DATA
+       VALIDATE THE ACTUAL SAVED DATA
+
+       This must never use validation.issues or frontend data.
+       It always starts from upload.dataRows loaded from MongoDB.
     ===================================================== */
 
-    const freshIssues = validateRows(upload.dataRows, upload.voucherType);
+    const sourceRows = JSON.parse(
+      JSON.stringify(Array.isArray(upload.dataRows) ? upload.dataRows : []),
+    );
+
+    const freshIssues = validateRows(sourceRows, upload.voucherType);
 
     /* =====================================================
-       PRESERVE OLD ISSUE IDs
+       PRESERVE OLD ISSUE IDs WHERE POSSIBLE
     ===================================================== */
 
     const oldIssues = Array.isArray(validation.issues) ? validation.issues : [];
@@ -840,87 +881,48 @@ exports.revalidate = async (req, res, next) => {
     );
 
     /* =====================================================
-       CREATE FRESH ISSUE LIST
+       CREATE THE NEW CURRENT ISSUE LIST
+
+       If an issue still exists in the source data, it is
+       pending. Fixed/ignored status must never hide a real
+       current validation problem.
     ===================================================== */
 
     validation.issues = freshIssues.map((freshIssue) => {
       const key = `${freshIssue.row}:${freshIssue.column}`;
-
       const old = oldByKey.get(key);
 
       return {
         ...freshIssue,
-
-        /*
-         * Fresh validation means
-         * the issue still actually
-         * exists in source data.
-         */
         status: "pending",
-
-        /*
-         * Preserve issue ID when
-         * possible.
-         */
         id: old?.id || freshIssue.id,
       };
     });
 
-    /* =====================================================
-       UPDATE CHECKED ROW COUNT BEFORE REPORT
-    ===================================================== */
-
     validation.checked = upload.rows;
-
-    /* =====================================================
-       RECALCULATE SUMMARY
-    ===================================================== */
 
     const stats = await report(validation);
 
     await validation.save();
 
-    /* =====================================================
-       SAVE VALIDATION REPORT
-    ===================================================== */
-
     await ValidationReport.create({
       user: req.user._id,
-
       validation: validation._id,
-
       fileName: upload.originalName,
-
       ...stats,
-
       status: validation.status,
     });
 
-    /* =====================================================
-       UPDATE UPLOAD STATUS
-    ===================================================== */
-
     upload.errors = stats.errors;
-
     upload.warnings = stats.warnings;
-
-    upload.status = "validated";
-
+    upload.status = stats.errors > 0 ? "failed" : "validated";
     await upload.save();
-
-    /* =====================================================
-       RESPONSE
-    ===================================================== */
 
     return res.json({
       success: true,
-
       validationId: validation._id,
-
       ...stats,
-
       status: validation.status,
-
       issues: validation.issues,
     });
   } catch (error) {
