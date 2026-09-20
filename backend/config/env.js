@@ -7,7 +7,13 @@ module.exports = {
 
   mongoUri: process.env.MONGO_URI || "",
 
-  jwtSecret: process.env.JWT_SECRET || "",
+  jwtSecret: (() => {
+    if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("JWT_SECRET is required in production.");
+    }
+    return "dev-only-jwt-secret";
+  })(),
 
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
 

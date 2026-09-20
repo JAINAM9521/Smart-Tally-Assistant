@@ -25,6 +25,8 @@ const supportedVoucherTypes = [
   "Debit Note",
 ];
 
+const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+
 function issue(
   row,
   column,
@@ -67,6 +69,11 @@ function isValidCalendarDate(day, month, year) {
   );
 }
 
+function formatDate(day, month, year) {
+  if (!isValidCalendarDate(day, month, year)) return null;
+  return `${String(day).padStart(2, "0")}-${String(month).padStart(2, "0")}-${year}`;
+}
+
 function validDate(value) {
   const text = String(value ?? "").trim();
   const match = text.match(/^(\d{2})-(\d{2})-(\d{4})$/);
@@ -82,19 +89,15 @@ function normalizeDate(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
 
+  const iso = raw.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (iso) {
+    return formatDate(Number(iso[3]), Number(iso[2]), Number(iso[1]));
+  }
+
   const match = raw.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
   if (!match) return null;
 
-  const day = Number(match[1]);
-  const month = Number(match[2]);
-  const year = Number(match[3]);
-
-  if (!isValidCalendarDate(day, month, year)) return null;
-
-  return `${String(day).padStart(2, "0")}-${String(month).padStart(
-    2,
-    "0",
-  )}-${year}`;
+  return formatDate(Number(match[1]), Number(match[2]), Number(match[3]));
 }
 
 function normalizeLedger(value) {
@@ -114,10 +117,59 @@ function findCanonicalLedger(value) {
   );
 }
 
+function suggestLedger(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return null;
+
+  const canonical = findCanonicalLedger(trimmed);
+  if (canonical) return canonical;
+
+  const fuse = new Fuse(ledgers, { includeScore: true, threshold: 0.45 });
+  const match = fuse.search(trimmed)[0];
+  return match?.item || null;
+}
+
+function validateLedgerColumn(row, rowNumber, column, issues) {
+  const ledger = String(row?.[column] ?? "").trim();
+  if (!ledger) return;
+
+  const canonicalLedger = findCanonicalLedger(ledger);
+
+  if (canonicalLedger && canonicalLedger !== ledger) {
+    issues.push(
+      issue(
+        rowNumber,
+        column,
+        ledger,
+        "Ledger name formatting should match the Tally ledger",
+        "warning",
+        `Use ${canonicalLedger}.`,
+        true,
+      ),
+    );
+    return;
+  }
+
+  if (!canonicalLedger) {
+    const suggested = suggestLedger(ledger);
+    issues.push(
+      issue(
+        rowNumber,
+        column,
+        ledger,
+        "Ledger name does not exactly match",
+        "warning",
+        suggested ? `Use ${suggested}.` : "Use an exact Tally ledger name.",
+        Boolean(suggested),
+      ),
+    );
+  }
+}
+
 function validateRows(rows, voucherType) {
   const issues = [];
 
-  if (!Array.isArray(rows)) {
+  if (!Array.isArray(rows) || rows.length === 0) {
     return [
       issue(
         2,
@@ -146,7 +198,6 @@ function validateRows(rows, voucherType) {
   }
 
   const invoiceSeen = new Map();
-  const fuse = new Fuse(ledgers, { includeScore: true, threshold: 0.45 });
 
   rows.forEach((row, index) => {
     const rowNumber = index + 2;
@@ -169,31 +220,34 @@ function validateRows(rows, voucherType) {
     }
 
     const rawAmount = row?.AMOUNT;
-    const amount = normalizeAmount(rawAmount);
-    if (!amount) {
-      issues.push(
-        issue(
-          rowNumber,
-          "AMOUNT",
-          rawAmount,
-          "Invalid amount format",
-          "error",
-          "Use a numeric value such as 10000.",
-          false,
-        ),
-      );
-    } else if (String(rawAmount ?? "").trim() !== amount) {
-      issues.push(
-        issue(
-          rowNumber,
-          "AMOUNT",
-          rawAmount,
-          "Amount can be normalized",
-          "warning",
-          `Use ${amount}.`,
-          true,
-        ),
-      );
+    const amountText = String(rawAmount ?? "").trim();
+    if (amountText) {
+      const amount = normalizeAmount(rawAmount);
+      if (!amount) {
+        issues.push(
+          issue(
+            rowNumber,
+            "AMOUNT",
+            rawAmount,
+            "Invalid amount format",
+            "error",
+            "Use a numeric value such as 10000.",
+            false,
+          ),
+        );
+      } else if (amountText !== amount) {
+        issues.push(
+          issue(
+            rowNumber,
+            "AMOUNT",
+            rawAmount,
+            "Amount can be normalized",
+            "warning",
+            `Use ${amount}.`,
+            true,
+          ),
+        );
+      }
     }
 
     const rawDate = row?.DATE;
@@ -213,26 +267,14 @@ function validateRows(rows, voucherType) {
       );
     }
 
-    const ledger = String(row?.["TO-CR"] ?? "").trim();
-    const canonicalLedger = findCanonicalLedger(ledger);
-    if (ledger && !canonicalLedger) {
-      const match = fuse.search(ledger)[0];
-      issues.push(
-        issue(
-          rowNumber,
-          "TO-CR",
-          ledger,
-          "Ledger name does not exactly match",
-          "warning",
-          match ? `Use ${match.item}.` : "Use an exact Tally ledger name.",
-          Boolean(match),
-        ),
-      );
-    }
+    validateLedgerColumn(row, rowNumber, "TO-CR", issues);
+    validateLedgerColumn(row, rowNumber, "BY-DR", issues);
 
     const voucher = String(row?.["VOUCHER NO."] ?? "").trim();
+    const dateKey = String(row?.DATE ?? "").trim();
     if (voucher) {
-      if (invoiceSeen.has(voucher)) {
+      const duplicateKey = `${voucher}|${dateKey}|${String(voucherType || "")}`;
+      if (invoiceSeen.has(duplicateKey)) {
         issues.push(
           issue(
             rowNumber,
@@ -240,30 +282,43 @@ function validateRows(rows, voucherType) {
             voucher,
             "Duplicate voucher number",
             "error",
-            `Duplicate found on row ${invoiceSeen.get(voucher)}.`,
+            `Duplicate found on row ${invoiceSeen.get(duplicateKey)}.`,
             false,
           ),
         );
       } else {
-        invoiceSeen.set(voucher, rowNumber);
+        invoiceSeen.set(duplicateKey, rowNumber);
       }
     }
 
-    const gstin = String(row?.GSTIN ?? "")
-      .trim()
-      .toUpperCase();
-    if (gstin && !/^[0-9A-Z]{15}$/.test(gstin)) {
-      issues.push(
-        issue(
-          rowNumber,
-          "GSTIN",
-          gstin,
-          "Invalid GSTIN format",
-          "error",
-          "Enter a valid 15-character GSTIN.",
-          false,
-        ),
-      );
+    const gstinRaw = String(row?.GSTIN ?? "").trim();
+    if (gstinRaw) {
+      const gstin = gstinRaw.replace(/\s+/g, "").toUpperCase();
+      if (GSTIN_PATTERN.test(gstin) && gstin !== gstinRaw) {
+        issues.push(
+          issue(
+            rowNumber,
+            "GSTIN",
+            gstinRaw,
+            "GSTIN formatting can be normalized",
+            "warning",
+            `Use ${gstin}.`,
+            true,
+          ),
+        );
+      } else if (!GSTIN_PATTERN.test(gstin)) {
+        issues.push(
+          issue(
+            rowNumber,
+            "GSTIN",
+            gstinRaw,
+            "Invalid GSTIN format",
+            "error",
+            "Enter a valid 15-character GSTIN.",
+            false,
+          ),
+        );
+      }
     }
 
     const referenceNumber = String(row?.["REFERENCE NO."] ?? "").trim();
@@ -321,4 +376,5 @@ module.exports = {
   normalizeDate,
   normalizeLedger,
   findCanonicalLedger,
+  suggestLedger,
 };

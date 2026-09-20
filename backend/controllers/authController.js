@@ -41,7 +41,10 @@ exports.register = async (req, res, next) => {
       success: true,
       message: "Account created. Verify your email before signing in.",
       user: publicUser(user),
-      developmentVerificationToken: process.env.EMAIL_HOST ? undefined : token,
+      developmentVerificationToken:
+        process.env.NODE_ENV === "production" || process.env.EMAIL_HOST
+          ? undefined
+          : token,
     });
   } catch (e) {
     next(e);
@@ -144,7 +147,10 @@ exports.forgotPassword = async (req, res, next) => {
     res.json({
       success: true,
       message: "Password reset instructions were sent.",
-      developmentOtp: delivery.development ? otp : undefined,
+      developmentOtp:
+        process.env.NODE_ENV === "production" || !delivery.development
+          ? undefined
+          : otp,
       resetId: reset._id,
     });
   } catch (e) {
@@ -154,17 +160,27 @@ exports.forgotPassword = async (req, res, next) => {
 exports.resetPassword = async (req, res, next) => {
   try {
     const reset = await PasswordReset.findById(req.body.resetId);
-    if (
-      !reset ||
-      reset.used ||
-      expired(reset.expiresAt) ||
-      !(await comparePassword(req.body.otp, reset.otpHash))
-    )
+    if (!reset || reset.used || expired(reset.expiresAt))
       return res.status(400).json({
         success: false,
         message: "Invalid or expired OTP",
         code: "VALIDATION_ERROR",
       });
+    if (Number(reset.attempts || 0) >= 5)
+      return res.status(429).json({
+        success: false,
+        message: "Too many OTP attempts. Request a new code.",
+        code: "TOO_MANY_ATTEMPTS",
+      });
+    if (!(await comparePassword(req.body.otp, reset.otpHash))) {
+      reset.attempts = Number(reset.attempts || 0) + 1;
+      await reset.save();
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired OTP",
+        code: "VALIDATION_ERROR",
+      });
+    }
     const user = await User.findById(reset.user);
     user.passwordHash = await hashPassword(req.body.password);
     await user.save();

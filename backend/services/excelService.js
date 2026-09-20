@@ -34,6 +34,7 @@ const aliases = new Map([
   ["vouchernumber", "VOUCHER NO."],
   ["gstin", "GSTIN"],
   ["gst details", "GSTIN"],
+  ["gstdetails", "GSTIN"],
   ["narration", "NARRATION"],
   ["reference no", "REFERENCE NO."],
   ["reference no.", "REFERENCE NO."],
@@ -50,14 +51,15 @@ function normalizeHeader(value) {
 
 function canonicalHeader(value) {
   const normalized = normalizeHeader(value);
+  if (!normalized) return "";
   return aliases.get(normalized) || String(value ?? "").trim();
 }
 
 function excelDateToString(value) {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return `${String(value.getDate()).padStart(2, "0")}-${String(
-      value.getMonth() + 1,
-    ).padStart(2, "0")}-${value.getFullYear()}`;
+    return `${String(value.getUTCDate()).padStart(2, "0")}-${String(
+      value.getUTCMonth() + 1,
+    ).padStart(2, "0")}-${value.getUTCFullYear()}`;
   }
 
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -73,6 +75,13 @@ function excelDateToString(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
 
+  const iso = raw.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (iso) {
+    return `${String(Number(iso[3])).padStart(2, "0")}-${String(
+      Number(iso[2]),
+    ).padStart(2, "0")}-${iso[1]}`;
+  }
+
   const match = raw.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
   if (match) {
     return `${String(Number(match[1])).padStart(2, "0")}-${String(
@@ -83,56 +92,117 @@ function excelDateToString(value) {
   return raw;
 }
 
-function normalizeRow(row) {
-  const normalized = {};
-
-  for (const [key, value] of Object.entries(row || {})) {
-    const column = canonicalHeader(key);
-    normalized[column] = column === "DATE" ? excelDateToString(value) : value;
+function cellToValue(column, value) {
+  if (value === undefined || value === null) return "";
+  if (column === "DATE") return excelDateToString(value);
+  if (column === "GSTIN") return String(value).trim().toUpperCase();
+  if (column === "AMOUNT" && typeof value === "number") {
+    return String(value);
   }
+  return typeof value === "string" ? value.trim() : value;
+}
 
-  for (const column of columns) {
-    if (!(column in normalized)) normalized[column] = "";
-  }
-
-  if (normalized.GSTIN) {
-    normalized.GSTIN = String(normalized.GSTIN).trim().toUpperCase();
-  }
-
-  return normalized;
+function isBlankRow(row) {
+  return columns.every((column) => String(row?.[column] ?? "").trim() === "");
 }
 
 function readWorkbook(filePath) {
-  const workbook = XLSX.readFile(filePath, {
-    cellDates: true,
-    raw: true,
-  });
+  let workbook;
+
+  try {
+    workbook = XLSX.readFile(filePath, {
+      cellDates: false,
+      raw: true,
+    });
+  } catch {
+    const error = new Error(
+      "The file could not be read as a valid spreadsheet.",
+    );
+    error.status = 400;
+    error.code = "INVALID_FILE";
+    throw error;
+  }
 
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
 
   if (!sheet) {
-    throw new Error("The workbook does not contain a readable worksheet.");
+    const error = new Error("The workbook does not contain a readable worksheet.");
+    error.status = 400;
+    error.code = "INVALID_FILE";
+    throw error;
   }
 
-  const rawRows = XLSX.utils.sheet_to_json(sheet, {
+  const matrix = XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
     defval: "",
     raw: true,
+    blankrows: false,
   });
 
-  const rows = rawRows.map(normalizeRow);
+  if (!matrix.length) {
+    const error = new Error("The spreadsheet is empty.");
+    error.status = 400;
+    error.code = "EMPTY_FILE";
+    throw error;
+  }
 
-  const rawHeader =
-    XLSX.utils.sheet_to_json(sheet, {
-      header: 1,
-      defval: "",
-      raw: true,
-    })[0] || [];
+  const headerRow = matrix[0] || [];
+  const mappedHeaders = [];
+  const seen = new Set();
 
-  const detectedColumns = rawHeader.map(canonicalHeader).filter(Boolean);
+  for (const header of headerRow) {
+    const column = canonicalHeader(header);
+    if (!column) {
+      mappedHeaders.push("");
+      continue;
+    }
+    if (seen.has(column)) {
+      const error = new Error(`Duplicate column "${column}" is not allowed.`);
+      error.status = 400;
+      error.code = "DUPLICATE_COLUMN";
+      throw error;
+    }
+    seen.add(column);
+    mappedHeaders.push(column);
+  }
+
+  const detectedColumns = mappedHeaders.filter(Boolean);
+
+  if (!detectedColumns.length) {
+    const error = new Error("No recognizable column headers were found.");
+    error.status = 400;
+    error.code = "MISSING_COLUMNS";
+    throw error;
+  }
+
+  const rows = [];
+
+  for (const cells of matrix.slice(1)) {
+    const row = {};
+    mappedHeaders.forEach((column, index) => {
+      if (!column) return;
+      row[column] = cellToValue(column, cells?.[index]);
+    });
+
+    for (const column of columns) {
+      if (!(column in row)) row[column] = "";
+    }
+
+    if (!isBlankRow(row)) {
+      rows.push(row);
+    }
+  }
+
+  if (!rows.length) {
+    const error = new Error("The spreadsheet does not contain any data rows.");
+    error.status = 400;
+    error.code = "EMPTY_FILE";
+    throw error;
+  }
 
   return {
     rows,
-    columns: detectedColumns.length ? detectedColumns : columns,
+    columns: detectedColumns,
   };
 }
 

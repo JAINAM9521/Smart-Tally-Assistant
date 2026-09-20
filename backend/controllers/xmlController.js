@@ -50,7 +50,10 @@ exports.generate = async (req, res, next) => {
       });
     }
 
-    const upload = await Upload.findById(validation.upload);
+    const upload = await Upload.findOne({
+      _id: validation.upload,
+      ...(req.user.role === "admin" ? {} : { user: req.user._id }),
+    });
 
     if (!upload) {
       return res.status(404).json({
@@ -94,10 +97,12 @@ exports.generate = async (req, res, next) => {
       rows,
     });
 
-    if (!validateXml(xmlContent)) {
+    const xmlCheck = validateXml(xmlContent);
+
+    if (!xmlCheck.valid) {
       return res.status(400).json({
         success: false,
-        message: "Generated XML failed structural validation.",
+        message: xmlCheck.message || "Generated XML failed structural validation.",
         code: "XML_VALIDATION_ERROR",
       });
     }
@@ -139,11 +144,16 @@ exports.generate = async (req, res, next) => {
       xmlContent,
     });
 
-    const outputDirectory = path.resolve(__dirname, "..", xmlDir);
-
-    ensureDirectories(outputDirectory);
-
-    fs.writeFileSync(path.join(outputDirectory, fileName), xmlContent, "utf8");
+    try {
+      const outputDirectory = path.resolve(__dirname, "..", xmlDir);
+      ensureDirectories(outputDirectory);
+      fs.writeFileSync(path.join(outputDirectory, fileName), xmlContent, "utf8");
+    } catch (diskError) {
+      console.warn(
+        "XML was saved in the database, but the local file copy could not be written:",
+        diskError?.message || diskError,
+      );
+    }
 
     return res.status(201).json({
       success: true,

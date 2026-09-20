@@ -244,9 +244,20 @@ function Conversion() {
           save("backendValidationId", validationId);
           save(`backendValidationResult:${validationId}`, result);
         }
-      }
 
-      notify("Safe issues were auto-fixed. Revalidate before XML generation.");
+        const fixedCount =
+          Number(result.fixed || 0) ||
+          (result.issues || []).filter((issue) => issue.status === "fixed")
+            .length;
+
+        notify(
+          fixedCount
+            ? "Safe issues were auto-fixed. Revalidate before XML generation."
+            : "No auto-fixable issues were applied. Review remaining issues.",
+        );
+      } else {
+        notify("Auto Fix did not return a result.");
+      }
     } catch (error) {
       notify(error?.message || "Auto Fix failed.");
     } finally {
@@ -1180,6 +1191,10 @@ function ErrorView({
 
                 <strong>
                   {recommendedIssue.suggestedValue ||
+                    String(recommendedIssue.recommendation || "").replace(
+                      /^Use\s+/i,
+                      "",
+                    ).replace(/\.$/, "") ||
                     recommendedIssue.recommendation}
                 </strong>
               </div>

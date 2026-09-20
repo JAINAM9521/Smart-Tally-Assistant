@@ -7,15 +7,34 @@ function normalizeDate(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
 
-  let match = raw.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
-  if (!match) match = raw.match(/^(\d{2})(\d{2})(\d{4})$/);
-  if (!match) return "";
+  const iso = raw.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (iso) {
+    return toTallyDate(Number(iso[3]), Number(iso[2]), Number(iso[1]));
+  }
 
-  const day = Number(match[1]);
-  const month = Number(match[2]);
-  const year = Number(match[3]);
+  const separated = raw.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+  if (separated) {
+    return toTallyDate(
+      Number(separated[1]),
+      Number(separated[2]),
+      Number(separated[3]),
+    );
+  }
+
+  const compact = raw.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compact) {
+    return toTallyDate(
+      Number(compact[3]),
+      Number(compact[2]),
+      Number(compact[1]),
+    );
+  }
+
+  return "";
+}
+
+function toTallyDate(day, month, year) {
   const date = new Date(Date.UTC(year, month - 1, day));
-
   if (
     date.getUTCFullYear() !== year ||
     date.getUTCMonth() !== month - 1 ||
@@ -24,11 +43,7 @@ function normalizeDate(value) {
     return "";
   }
 
-  // Tally requires YYYYMMDD for voucher dates.
-  return `${year}${String(month).padStart(2, "0")}${String(day).padStart(
-    2,
-    "0",
-  )}`;
+  return `${year}${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}`;
 }
 
 function normalizeAmount(value) {
@@ -64,6 +79,14 @@ function getNarration(row) {
 
 function isInvoiceType(voucherType) {
   return ["Sales", "Purchase"].includes(voucherType);
+}
+
+function partyLedgerName(type, debitLedger, creditLedger) {
+  if (type === "Sales" || type === "Debit Note" || type === "Payment")
+    return debitLedger;
+  if (type === "Purchase" || type === "Credit Note" || type === "Receipt")
+    return creditLedger;
+  return "";
 }
 
 function validateRowsForXml(rows, voucherType) {
@@ -185,7 +208,7 @@ function addLedgerEntry(
 
 function buildXml({ voucherType, rows }) {
   const type = String(voucherType || "").trim();
-  const root = create({ version: "1.0", encoding: "UTF-8" })
+  const cursor = create({ version: "1.0", encoding: "UTF-8" })
     .ele("ENVELOPE")
     .ele("HEADER")
     .ele("VERSION")
@@ -202,10 +225,13 @@ function buildXml({ voucherType, rows }) {
     .up()
     .up()
     .ele("BODY")
-    .ele("DESC")
+    .ele("IMPORTDATA")
+    .ele("REQUESTDESC")
+    .ele("REPORTNAME")
+    .txt("Vouchers")
     .up()
-    .ele("DATA")
-    .up();
+    .up()
+    .ele("REQUESTDATA");
 
   rows.forEach((row) => {
     const date = normalizeDate(row?.DATE);
@@ -214,8 +240,9 @@ function buildXml({ voucherType, rows }) {
     const debitLedger = getDebitLedger(row);
     const creditLedger = getCreditLedger(row);
     const narration = getNarration(row);
+    const partyName = partyLedgerName(type, debitLedger, creditLedger);
 
-    const message = root.ele("TALLYMESSAGE");
+    const message = cursor.ele("TALLYMESSAGE");
     const voucher = message.ele("VOUCHER", {
       VCHTYPE: type,
       ACTION: "Create",
@@ -225,6 +252,7 @@ function buildXml({ voucherType, rows }) {
     voucher.ele("DATE").txt(date).up();
     voucher.ele("VOUCHERTYPENAME").txt(type).up();
     voucher.ele("VOUCHERNUMBER").txt(voucherNumber).up();
+    if (partyName) voucher.ele("PARTYLEDGERNAME").txt(partyName).up();
     voucher.ele("PERSISTEDVIEW").txt("Accounting Voucher View").up();
     voucher
       .ele("ISINVOICE")
@@ -233,9 +261,10 @@ function buildXml({ voucherType, rows }) {
 
     if (narration) voucher.ele("NARRATION").txt(narration).up();
 
-    // The application's spreadsheet contract is BY-DR = debit and TO-CR = credit.
-    const partyIsDebit = type === "Sales" || type === "Credit Note";
-    const partyIsCredit = type === "Purchase" || type === "Debit Note";
+    const partyIsDebit =
+      type === "Sales" || type === "Debit Note" || type === "Payment";
+    const partyIsCredit =
+      type === "Purchase" || type === "Credit Note" || type === "Receipt";
 
     addLedgerEntry(
       voucher,
@@ -258,29 +287,63 @@ function buildXml({ voucherType, rows }) {
     message.up();
   });
 
-  return root.end({ prettyPrint: true });
+  return cursor.end({ prettyPrint: true });
+}
+
+function asArray(value) {
+  if (value == null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function parseXml(xml) {
+  return new XMLParser({
+    ignoreAttributes: false,
+    parseTagValue: false,
+    parseAttributeValue: false,
+  }).parse(xml);
 }
 
 function validateXml(xml) {
   try {
-    const parsed = new XMLParser({ ignoreAttributes: false }).parse(xml);
+    const parsed = parseXml(xml);
     const envelope = parsed?.ENVELOPE;
     const header = envelope?.HEADER;
-    const body = envelope?.BODY;
-    const data = body?.DATA;
-    const messages = data?.TALLYMESSAGE;
+    const requestData = envelope?.BODY?.IMPORTDATA?.REQUESTDATA;
+    const messages = requestData?.TALLYMESSAGE;
 
-    if (!header || !body || !data || !messages) return false;
+    if (!header || !requestData || !messages) {
+      return {
+        valid: false,
+        message: "XML is missing ENVELOPE, IMPORTDATA or TALLYMESSAGE.",
+      };
+    }
 
-    const vouchers = Array.isArray(messages) ? messages : [messages];
-    return vouchers.every((message) => {
+    const vouchers = asArray(messages);
+    const ok = vouchers.every((message) => {
       const voucher = message?.VOUCHER;
-      const entries = voucher?.["ALLLEDGERENTRIES.LIST"];
-      const list = Array.isArray(entries) ? entries : entries ? [entries] : [];
-      return Boolean(voucher && list.length >= 2);
+      const entries = asArray(voucher?.["ALLLEDGERENTRIES.LIST"]);
+      const date = String(voucher?.DATE ?? "");
+      return (
+        Boolean(voucher) &&
+        entries.length >= 2 &&
+        /^\d{8}$/.test(date) &&
+        Boolean(voucher.VOUCHERTYPENAME) &&
+        Boolean(voucher.VOUCHERNUMBER)
+      );
     });
+
+    return ok
+      ? { valid: true }
+      : {
+          valid: false,
+          message:
+            "XML vouchers are missing required date, type, number or ledger entries.",
+        };
   } catch {
-    return false;
+    return {
+      valid: false,
+      message: "Generated XML could not be parsed.",
+    };
   }
 }
 
@@ -290,4 +353,5 @@ module.exports = {
   validateRowsForXml,
   normalizeDate,
   normalizeAmount,
+  parseXml,
 };
