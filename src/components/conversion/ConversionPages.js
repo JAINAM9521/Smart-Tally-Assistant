@@ -1012,24 +1012,29 @@ function ErrorView({
               </p>
             </div>
 
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={pending.length ? onAutoFix : onRevalidate}
-              disabled={busy}
-            >
-              {pending.length ? (
-                <WandSparkles size={16} />
-              ) : (
+            <div className="validation-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={onRevalidate}
+                disabled={busy}
+              >
                 <ShieldCheck size={16} />
-              )}
+                {busy ? "Revalidating..." : "Revalidate"}
+              </button>
 
-              {busy
-                ? "Processing..."
-                : pending.length
-                  ? "Auto Fix Safe Errors"
-                  : "Revalidate"}
-            </button>
+              {pending.length > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={onAutoFix}
+                  disabled={busy}
+                >
+                  <WandSparkles size={16} />
+                  {busy ? "Processing..." : "Auto Fix Safe Errors"}
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="issue-filters">

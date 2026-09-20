@@ -1,3 +1,5 @@
+"use strict";
+
 const Upload = require("../models/Upload");
 const Validation = require("../models/Validation");
 const ValidationReport = require("../models/ValidationReport");
@@ -24,13 +26,16 @@ const own = (validation, user) =>
  * Validation issue rows are Excel row numbers.
  *
  * Example:
- *   Header = row 1
- *   First data row = row 2
+ *
+ * Header = row 1
+ * First data row = row 2
  *
  * Therefore:
- *   Excel row 2 -> dataRows[0]
- *   Excel row 3 -> dataRows[1]
+ *
+ * Excel row 2 -> dataRows[0]
+ * Excel row 3 -> dataRows[1]
  */
+
 const getDataRowIndex = (issueRow, dataRows) => {
   const excelRow = Number(issueRow);
 
@@ -38,6 +43,12 @@ const getDataRowIndex = (issueRow, dataRows) => {
     return -1;
   }
 
+  /*
+   * Normal Excel mapping:
+   *
+   * Row 2 -> index 0
+   * Row 3 -> index 1
+   */
   const primaryIndex = excelRow - 2;
 
   if (primaryIndex >= 0 && primaryIndex < dataRows.length) {
@@ -45,8 +56,8 @@ const getDataRowIndex = (issueRow, dataRows) => {
   }
 
   /*
-   * Fallback in case the validation service stores
-   * zero-based/one-based data row indexes instead.
+   * Fallback in case a validation service
+   * returns a one-based row index.
    */
   const fallbackIndex = excelRow - 1;
 
@@ -57,14 +68,10 @@ const getDataRowIndex = (issueRow, dataRows) => {
   return -1;
 };
 
-/*
- * Convert amount into a numeric string.
- *
- * Examples:
- *   ₹12,500  -> 12500
- *   12,500   -> 12500
- *   12500     -> 12500
- */
+/* =========================================================
+   NORMALIZE AMOUNT
+========================================================= */
+
 const normalizeAmount = (value) => {
   const cleaned = String(value ?? "")
     .trim()
@@ -83,14 +90,10 @@ const normalizeAmount = (value) => {
   return String(number);
 };
 
-/*
- * Normalize date separators.
- *
- * 26/08/2026 -> 26-08-2026
- * 26.08.2026 -> 26-08-2026
- *
- * Also preserves DD-MM-YYYY.
- */
+/* =========================================================
+   NORMALIZE DATE
+========================================================= */
+
 const normalizeDate = (value) => {
   const raw = String(value ?? "").trim();
 
@@ -105,18 +108,21 @@ const normalizeDate = (value) => {
   }
 
   const day = String(Number(match[1])).padStart(2, "0");
-
   const month = String(Number(match[2])).padStart(2, "0");
-
   const year = match[3];
 
   return `${day}-${month}-${year}`;
 };
 
+/* =========================================================
+   GET SUGGESTED VALUE
+========================================================= */
+
 /*
- * Determine whether an issue can provide a concrete
- * corrected value.
+ * Checks all possible properties that can contain
+ * a concrete correction value.
  */
+
 const getSuggestedValue = (issue) => {
   const candidates = [
     issue?.suggestedValue,
@@ -138,14 +144,23 @@ const getSuggestedValue = (issue) => {
   return "";
 };
 
+/* =========================================================
+   APPLY ISSUE TO ACTUAL UPLOAD DATA
+========================================================= */
+
 /*
- * Apply the issue fix to the actual upload row.
- *
  * IMPORTANT:
- * This is the part that was missing before.
- * Validation status alone is not enough because XML
- * generation reads Upload.dataRows.
+ *
+ * Changing Validation.issues is NOT enough.
+ *
+ * XML generation uses:
+ *
+ * Upload.dataRows
+ *
+ * Therefore every successful fix must also update
+ * the original uploaded data.
  */
+
 const applyIssueToUpload = (upload, issue) => {
   if (!upload || !Array.isArray(upload.dataRows) || !issue) {
     return {
@@ -165,13 +180,20 @@ const applyIssueToUpload = (upload, issue) => {
 
   const row = upload.dataRows[rowIndex];
 
+  if (!row || typeof row !== "object") {
+    return {
+      changed: false,
+      message: `Excel row ${issue.row} is invalid.`,
+    };
+  }
+
   const column = String(issue.column || "").trim();
 
   const suggestedValue = getSuggestedValue(issue);
 
-  /* -------------------------------------------------------
+  /* =======================================================
      AMOUNT
-  ------------------------------------------------------- */
+  ======================================================= */
 
   if (column === "AMOUNT") {
     const normalized = normalizeAmount(
@@ -193,9 +215,9 @@ const applyIssueToUpload = (upload, issue) => {
     };
   }
 
-  /* -------------------------------------------------------
+  /* =======================================================
      DATE
-  ------------------------------------------------------- */
+  ======================================================= */
 
   if (column === "DATE") {
     const normalized = normalizeDate(
@@ -217,9 +239,9 @@ const applyIssueToUpload = (upload, issue) => {
     };
   }
 
-  /* -------------------------------------------------------
+  /* =======================================================
      VOUCHER NUMBER
-  ------------------------------------------------------- */
+  ======================================================= */
 
   if (
     column === "VOUCHER NO." ||
@@ -227,11 +249,12 @@ const applyIssueToUpload = (upload, issue) => {
     column === "VOUCHERNUMBER"
   ) {
     /*
-     * We can only write a voucher number when a real
-     * suggested/corrected value is available.
+     * Never invent a voucher number.
      *
-     * We intentionally do NOT invent voucher numbers.
+     * Only write it if an actual suggested value
+     * has been supplied.
      */
+
     if (suggestedValue) {
       row["VOUCHER NO."] = suggestedValue;
 
@@ -247,9 +270,9 @@ const applyIssueToUpload = (upload, issue) => {
     };
   }
 
-  /* -------------------------------------------------------
+  /* =======================================================
      BY-DR / PARTY LEDGER
-  ------------------------------------------------------- */
+  ======================================================= */
 
   if (column === "BY-DR" || column === "PARTYLEDGERNAME") {
     if (suggestedValue) {
@@ -267,9 +290,29 @@ const applyIssueToUpload = (upload, issue) => {
     };
   }
 
-  /* -------------------------------------------------------
+  /* =======================================================
+     TO-CR / LEDGER
+  ======================================================= */
+
+  if (column === "TO-CR") {
+    if (suggestedValue) {
+      row["TO-CR"] = suggestedValue;
+
+      return {
+        changed: true,
+        value: suggestedValue,
+      };
+    }
+
+    return {
+      changed: false,
+      message: "No actual TO-CR ledger value was supplied for this issue.",
+    };
+  }
+
+  /* =======================================================
      GSTIN
-  ------------------------------------------------------- */
+  ======================================================= */
 
   if (column === "GSTIN") {
     if (suggestedValue) {
@@ -287,9 +330,9 @@ const applyIssueToUpload = (upload, issue) => {
     };
   }
 
-  /* -------------------------------------------------------
+  /* =======================================================
      GENERIC SUGGESTED VALUE
-  ------------------------------------------------------- */
+  ======================================================= */
 
   if (suggestedValue) {
     row[column] = suggestedValue;
@@ -321,7 +364,7 @@ async function report(validation) {
 
   validation.warnings = stats.warnings;
 
-  validation.status = stats.errors ? "needs_review" : "validated";
+  validation.status = stats.errors > 0 ? "needs_review" : "validated";
 
   return stats;
 }
@@ -462,24 +505,71 @@ exports.autoFix = async (req, res, next) => {
           }),
     });
 
-    /*
-     * First use the existing safe-fix service.
-     */
+    if (!upload) {
+      return res.status(404).json({
+        success: false,
+        message: "Original upload not found",
+        code: "UPLOAD_NOT_FOUND",
+      });
+    }
+
+    /* =====================================================
+       STEP 1
+       Generate safe fixes
+    ===================================================== */
+
     validation.issues = applySafeFixes(validation.issues);
 
-    /*
-     * Then synchronize every issue marked fixed
-     * with the real Upload.dataRows.
-     */
-    if (upload && Array.isArray(validation.issues)) {
+    /* =====================================================
+       STEP 2
+       Apply fixes to actual Upload.dataRows
+    ===================================================== */
+
+    let uploadChanged = false;
+
+    if (Array.isArray(validation.issues)) {
       for (const issue of validation.issues) {
-        if (issue.status === "fixed") {
-          applyIssueToUpload(upload, issue);
+        if (issue.status !== "fixed") {
+          continue;
+        }
+
+        const result = applyIssueToUpload(upload, issue);
+
+        if (result.changed) {
+          uploadChanged = true;
+        } else {
+          /*
+           * If the actual data could not be
+           * changed, do NOT leave the issue
+           * falsely marked as fixed.
+           */
+
+          issue.status = "pending";
+
+          if (result.message) {
+            issue.recommendation = result.message;
+          }
         }
       }
+    }
+
+    /* =====================================================
+       STEP 3
+       Explicitly mark nested dataRows as modified
+    ===================================================== */
+
+    if (uploadChanged) {
+      upload.markModified("dataRows");
 
       await upload.save();
     }
+
+    /* =====================================================
+       STEP 4
+       Recalculate validation summary
+    ===================================================== */
+
+    validation.checked = upload.rows;
 
     const stats = await report(validation);
 
@@ -551,17 +641,12 @@ exports.fixIssue = async (req, res, next) => {
       });
     }
 
-    /*
-     * Apply the actual fix to the source row first.
-     */
+    /* =====================================================
+       APPLY ACTUAL SOURCE DATA FIX
+    ===================================================== */
+
     const result = applyIssueToUpload(upload, item);
 
-    /*
-     * Only mark fixed when we were able to make
-     * a real change OR the issue is a purely
-     * validation-state issue that has a concrete
-     * corrected value.
-     */
     if (!result.changed) {
       return res.status(400).json({
         success: false,
@@ -576,17 +661,29 @@ exports.fixIssue = async (req, res, next) => {
       });
     }
 
+    /* =====================================================
+       MARK ISSUE FIXED
+    ===================================================== */
+
     item.status = "fixed";
 
     item.currentValue = result.value;
 
-    /*
-     * Clear the issue message after a successful
-     * correction so the UI reflects the fixed state.
-     */
     item.issue = item.issue || item.message || "Validation issue";
 
+    /* =====================================================
+       SAVE ACTUAL DATA
+    ===================================================== */
+
+    upload.markModified("dataRows");
+
     await upload.save();
+
+    /* =====================================================
+       UPDATE SUMMARY
+    ===================================================== */
+
+    validation.checked = upload.rows;
 
     const stats = await report(validation);
 
@@ -610,11 +707,14 @@ exports.fixIssue = async (req, res, next) => {
 
 exports.apply = async (req, res, next) => {
   /*
-   * Apply recommendation uses the exact same
-   * source-row synchronization as Fix.
+   * Apply recommendation uses
+   * the exact same source-data
+   * synchronization as Fix.
    */
+
   req.body = {
     ...req.body,
+
     action: "apply",
   };
 
@@ -659,6 +759,8 @@ exports.ignore = async (req, res, next) => {
 
     item.status = "ignored";
 
+    validation.checked = validation.checked || 0;
+
     const stats = await report(validation);
 
     await validation.save();
@@ -699,12 +801,10 @@ exports.revalidate = async (req, res, next) => {
       });
     }
 
-    /*
-     * IMPORTANT:
-     * Re-read the actual corrected source rows from
-     * Upload.dataRows. This means validation is now
-     * checking the same data that XML generation uses.
-     */
+    /* =====================================================
+       LOAD ACTUAL UPLOAD
+    ===================================================== */
+
     const upload = await Upload.findOne({
       _id: validation.upload,
 
@@ -723,22 +823,25 @@ exports.revalidate = async (req, res, next) => {
       });
     }
 
-    /*
-     * Run the validation engine AGAIN against
-     * the corrected Upload.dataRows.
-     */
+    /* =====================================================
+       VALIDATE ACTUAL SAVED DATA
+    ===================================================== */
+
     const freshIssues = validateRows(upload.dataRows, upload.voucherType);
 
-    /*
-     * Preserve the current issue states where possible,
-     * but replace validation findings with the fresh
-     * results from the corrected data.
-     */
+    /* =====================================================
+       PRESERVE OLD ISSUE IDs
+    ===================================================== */
+
     const oldIssues = Array.isArray(validation.issues) ? validation.issues : [];
 
     const oldByKey = new Map(
       oldIssues.map((issue) => [`${issue.row}:${issue.column}`, issue]),
     );
+
+    /* =====================================================
+       CREATE FRESH ISSUE LIST
+    ===================================================== */
 
     validation.issues = freshIssues.map((freshIssue) => {
       const key = `${freshIssue.row}:${freshIssue.column}`;
@@ -749,25 +852,37 @@ exports.revalidate = async (req, res, next) => {
         ...freshIssue,
 
         /*
-         * A fresh issue is pending because
-         * the corrected source data still fails.
+         * Fresh validation means
+         * the issue still actually
+         * exists in source data.
          */
-        status: freshIssue.status || "pending",
+        status: "pending",
 
+        /*
+         * Preserve issue ID when
+         * possible.
+         */
         id: old?.id || freshIssue.id,
       };
     });
 
-    /*
-     * Any issues that no longer exist in fresh
-     * validation are removed from the blocking list.
-     */
-
-    const stats = await report(validation);
+    /* =====================================================
+       UPDATE CHECKED ROW COUNT BEFORE REPORT
+    ===================================================== */
 
     validation.checked = upload.rows;
 
+    /* =====================================================
+       RECALCULATE SUMMARY
+    ===================================================== */
+
+    const stats = await report(validation);
+
     await validation.save();
+
+    /* =====================================================
+       SAVE VALIDATION REPORT
+    ===================================================== */
 
     await ValidationReport.create({
       user: req.user._id,
@@ -781,6 +896,10 @@ exports.revalidate = async (req, res, next) => {
       status: validation.status,
     });
 
+    /* =====================================================
+       UPDATE UPLOAD STATUS
+    ===================================================== */
+
     upload.errors = stats.errors;
 
     upload.warnings = stats.warnings;
@@ -788,6 +907,10 @@ exports.revalidate = async (req, res, next) => {
     upload.status = "validated";
 
     await upload.save();
+
+    /* =====================================================
+       RESPONSE
+    ===================================================== */
 
     return res.json({
       success: true,
