@@ -29,6 +29,7 @@ import {
   fixIssue,
   generateXML,
   getXML,
+  getValidation,
   getUploadPreview,
   ignoreIssue,
   revalidateData,
@@ -147,6 +148,21 @@ function Conversion() {
     if (storedValidation) {
       setValidation(storedValidation);
     }
+
+    // Always fetch fresh/exact record from the backend
+    getValidation(validationId)
+      .then((res) => {
+        const val = res?.validation || res;
+        if (val) {
+          setValidation(val);
+          save(`backendValidationResult:${validationId}`, val);
+        }
+      })
+      .catch((err) => {
+        if (!storedValidation) {
+          notify(err?.message || "Failed to load validation report.");
+        }
+      });
   }, []);
 
   /* =========================================================
@@ -463,8 +479,9 @@ function Conversion() {
       }
 
       save("backendXmlId", xml._id);
+      save("selectedXmlFileId", xml._id);
 
-      go("/convert/xml-preview");
+      go(`/convert/xml-preview?xmlId=${encodeURIComponent(xml._id)}`);
     } catch (error) {
       notify(error?.message || "XML generation failed.");
     } finally {
@@ -1191,10 +1208,9 @@ function ErrorView({
 
                 <strong>
                   {recommendedIssue.suggestedValue ||
-                    String(recommendedIssue.recommendation || "").replace(
-                      /^Use\s+/i,
-                      "",
-                    ).replace(/\.$/, "") ||
+                    String(recommendedIssue.recommendation || "")
+                      .replace(/^Use\s+/i, "")
+                      .replace(/\.$/, "") ||
                     recommendedIssue.recommendation}
                 </strong>
               </div>
@@ -1282,7 +1298,14 @@ function SuccessView({ onReset }) {
         <button
           type="button"
           className="btn btn-secondary"
-          onClick={() => router.push("/convert/xml-preview")}
+          onClick={() => {
+            const xmlId = read("backendXmlId", null);
+            router.push(
+              xmlId
+                ? `/convert/xml-preview?xmlId=${encodeURIComponent(xmlId)}`
+                : "/convert/xml-preview",
+            );
+          }}
         >
           <Eye size={16} />
           View XML
@@ -1301,8 +1324,8 @@ function SuccessView({ onReset }) {
           <b>Next step: Import this XML file into Tally Prime.</b>
 
           <small>
-            Always verify imported accounting entries before finalizing
-            accounts.
+            Use Gateway of Tally &gt; Import &gt; Transactions and point to this
+            file.
           </small>
         </span>
       </div>
@@ -1322,10 +1345,20 @@ function XmlView() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const id = read("backendXmlId", null);
+    let id = null;
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      id = params.get("xmlId");
+    }
 
     if (!id) {
-      setError("No generated XML is available.");
+      id = read("selectedXmlFileId", null) || read("backendXmlId", null);
+    }
+
+    if (!id) {
+      setError(
+        "No generated XML file is selected. Please select a file from XML Files.",
+      );
       return;
     }
 

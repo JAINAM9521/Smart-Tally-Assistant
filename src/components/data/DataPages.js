@@ -146,7 +146,12 @@ function GenericTable({ type }) {
                       aria-label="Preview XML"
                       onClick={() => {
                         save("selectedXmlFileId", record._id);
-                        router.push("/convert/xml-preview");
+                        save("backendXmlId", record._id);
+                        router.push(
+                          `/convert/xml-preview?xmlId=${encodeURIComponent(
+                            record._id,
+                          )}`,
+                        );
                       }}
                     >
                       <Eye size={16} />
@@ -195,35 +200,19 @@ function ReportContent() {
       .catch((e) => setError(e.message));
   }, []);
 
-  const openReport = () => {
-    const validationId = read(
-      "backendValidationId",
-      null,
-    );
+  const openReport = (report) => {
+    const validationId =
+      report?.validation?._id || report?.validation || report?._id;
 
     if (!validationId) {
-      setError(
-        "No active validation run is available. Run validation again to open the detailed issues.",
-      );
+      setError("No active validation run is available for this report.");
       return;
     }
 
-    const storedValidation = read(
-      `backendValidationResult:${validationId}`,
-      null,
-    );
-
-    if (!storedValidation) {
-      setError(
-        "The detailed validation result is not available in this browser session. Run validation again to reopen its issues.",
-      );
-      return;
-    }
+    save("backendValidationId", validationId);
 
     router.push(
-      `/convert/errors?validationId=${encodeURIComponent(
-        validationId,
-      )}`,
+      `/convert/errors?validationId=${encodeURIComponent(validationId)}`,
     );
   };
 
@@ -258,14 +247,12 @@ function ReportContent() {
             <span>{r.score ?? 0}%</span>
             <span>{r.errors ?? 0}</span>
             <span>{r.warnings ?? 0}</span>
-            <Badge tone={r.errors ? "danger" : "success"}>
-              {r.status}
-            </Badge>
+            <Badge tone={r.errors ? "danger" : "success"}>{r.status}</Badge>
             <span className="row-actions">
               <button
                 type="button"
                 className="table-fix"
-                onClick={openReport}
+                onClick={() => openReport(r)}
               >
                 Open
               </button>
@@ -298,30 +285,43 @@ function AnalyticsContent() {
   return (
     <div className="stat-grid">
       <Stat
-        value={analytics.totalUploads ?? "—"}
+        value={analytics.totalUploads ?? 0}
         label="Files processed"
-        note="MongoDB"
+        note="From MongoDB"
       />
       <Stat
-        value={analytics.successfulConversions ?? "—"}
-        label="Successful conversions"
-        note="MongoDB"
-        tone="green"
-      />
-      <Stat
-        value={analytics.totalVouchers ?? "—"}
-        label="Total vouchers"
-        note="MongoDB"
+        value={analytics.totalRows ?? analytics.totalVouchers ?? 0}
+        label="Rows processed"
+        note="From MongoDB"
         tone="purple"
       />
       <Stat
+        value={analytics.totalXMLFiles ?? analytics.totalXML ?? 0}
+        label="XML files"
+        note="From MongoDB"
+        tone="blue"
+      />
+      <Stat
+        value={analytics.totalValidations ?? 0}
+        label="Validations"
+        note="From MongoDB"
+      />
+      <Stat
         value={
-          analytics.validationSuccessRate != null
-            ? `${analytics.validationSuccessRate}%`
-            : "—"
+          analytics.successRate != null
+            ? `${analytics.successRate}%`
+            : analytics.validationSuccessRate != null
+              ? `${analytics.validationSuccessRate}%`
+              : "0%"
         }
         label="Validation success rate"
         note="Calculated"
+        tone="green"
+      />
+      <Stat
+        value={analytics.successfulConversions ?? 0}
+        label="Successful conversions"
+        note="From MongoDB"
         tone="green"
       />
     </div>

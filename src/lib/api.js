@@ -207,6 +207,26 @@ export async function getCurrentUser() {
   return user;
 }
 
+export async function verifyEmail(token) {
+  if (!token) {
+    throw new Error("Verification token is required.");
+  }
+  return request("/auth/verify-email", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+}
+
+export async function resendVerification(email) {
+  if (!email) {
+    throw new Error("Email is required.");
+  }
+  return request("/auth/resend-verification", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
 /* =========================================================
    PASSWORD RESET
 ========================================================= */
@@ -518,8 +538,22 @@ export async function getUploadHistory(params = "") {
   return request(`/uploads${params ? `?${params}` : ""}`);
 }
 
+export async function getValidation(id) {
+  if (!id) {
+    throw new Error("Validation ID is required.");
+  }
+  return request(`/validation/${id}`);
+}
+
 export async function getValidationReports(params = "") {
   return request(`/reports/validation${params ? `?${params}` : ""}`);
+}
+
+export async function getValidationReport(id) {
+  if (!id) {
+    throw new Error("Report ID is required.");
+  }
+  return request(`/reports/validation/${id}`);
 }
 
 export async function getXMLFiles(params = "") {

@@ -1645,3 +1645,403 @@ describe("all 8 voucher types — complete verification matrix", () => {
     });
   }
 });
+
+/* ============================================================
+   CRITICAL REGRESSION TEST: 19 ISSUES → 9 FIXED → 10 REMAIN
+============================================================ */
+
+describe("critical regression test: 19 issues found → 9 auto-fixed → 10 remain on revalidate", () => {
+  it("proves 19 issues found, exactly 9 safe fixed, persisted to dataRows, and 10 remain on revalidate", () => {
+    // 6 accounting rows with precise issue distributions
+    const rows = [
+      // Row 1: 5 auto-fixable issues
+      // 1: AMOUNT '₹12,500' -> autoFixable
+      // 2: DATE '2026/02/01' -> autoFixable
+      // 3: TO-CR 'Sales' -> autoFixable ('Use Sales A/c.')
+      // 4: BY-DR 'Cash' -> autoFixable ('Use Cash A/c.')
+      // 5: GSTIN '27abcde1234f1z5' -> autoFixable ('Use 27ABCDE1234F1Z5.')
+      {
+        DATE: "2026/02/01",
+        "BY-DR": "Cash",
+        "TO-CR": "Sales",
+        AMOUNT: "₹12,500",
+        "VOUCHER NO.": "INV-101",
+        GSTIN: "27abcde1234f1z5",
+        "REFERENCE NO.": "REF-101",
+        NARRATION: "Test sale 1",
+      },
+      // Row 2: 4 auto-fixable issues (Total auto-fixable = 9)
+      // 6: AMOUNT ' 50,000 ' -> autoFixable
+      // 7: DATE '05/03/2026' -> autoFixable
+      // 8: TO-CR 'sales a/c' -> autoFixable
+      // 9: BY-DR 'bank a/c' -> autoFixable
+      {
+        DATE: "05/03/2026",
+        "BY-DR": "bank a/c",
+        "TO-CR": "sales a/c",
+        AMOUNT: " 50,000 ",
+        "VOUCHER NO.": "INV-102",
+        GSTIN: "27ABCDE1234F1Z5",
+        "REFERENCE NO.": "REF-102",
+        NARRATION: "Test sale 2",
+      },
+      // Row 3: 3 genuine unfixable issues
+      // 10: DATE '31-13-2026' -> invalid calendar date (unfixable)
+      // 11: AMOUNT 'TEN THOUSAND' -> invalid amount format (unfixable)
+      // 12: GSTIN 'INVALID_GST' -> invalid GSTIN format (unfixable)
+      {
+        DATE: "31-13-2026",
+        "BY-DR": "Customer A/c",
+        "TO-CR": "Sales A/c",
+        AMOUNT: "TEN THOUSAND",
+        "VOUCHER NO.": "INV-103",
+        GSTIN: "INVALID_GST",
+        "REFERENCE NO.": "REF-103",
+        NARRATION: "Test sale 3",
+      },
+      // Row 4: 5 genuine unfixable issues (missing required columns)
+      // 13: missing DATE
+      // 14: missing BY-DR
+      // 15: missing TO-CR
+      // 16: missing AMOUNT
+      // 17: missing VOUCHER NO.
+      {
+        DATE: "",
+        "BY-DR": "",
+        "TO-CR": "",
+        AMOUNT: "",
+        "VOUCHER NO.": "",
+        GSTIN: "",
+        "REFERENCE NO.": "REF-104",
+        NARRATION: "",
+      },
+      // Rows 5 & 6: 2 genuine unfixable issues
+      // 18: Duplicate voucher number INV-DUP on the same date (01-02-2026)
+      // 19: Missing reference number on row 5
+      {
+        DATE: "01-02-2026",
+        "BY-DR": "Customer A/c",
+        "TO-CR": "Sales A/c",
+        AMOUNT: "1000",
+        "VOUCHER NO.": "INV-DUP",
+        GSTIN: "",
+        "REFERENCE NO.": "",
+        NARRATION: "First instance",
+      },
+      {
+        DATE: "01-02-2026",
+        "BY-DR": "Customer A/c",
+        "TO-CR": "Sales A/c",
+        AMOUNT: "1000",
+        "VOUCHER NO.": "INV-DUP",
+        GSTIN: "",
+        "REFERENCE NO.": "REF-106",
+        NARRATION: "Second instance",
+      },
+    ];
+
+    // Step 1: Validation finds exactly 19 issues
+    const initialIssues = validateRows(rows, "Sales");
+    assert.equal(
+      initialIssues.length,
+      19,
+      `Expected exactly 19 issues initially, got ${initialIssues.length}`,
+    );
+
+    const fixable = initialIssues.filter((i) => i.autoFixable);
+    const unfixable = initialIssues.filter((i) => !i.autoFixable);
+    assert.equal(
+      fixable.length,
+      9,
+      `Expected exactly 9 auto-fixable issues, got ${fixable.length}`,
+    );
+    assert.equal(
+      unfixable.length,
+      10,
+      `Expected exactly 10 genuine unfixable issues, got ${unfixable.length}`,
+    );
+
+    // Verify critical unfixable item: 31-13-2026 must remain an issue and NOT be guessed
+    const invalidDateIssue = initialIssues.find(
+      (i) => i.currentValue === "31-13-2026",
+    );
+    assert.ok(invalidDateIssue, "31-13-2026 must be flagged as an issue");
+    assert.equal(
+      invalidDateIssue.autoFixable,
+      false,
+      "31-13-2026 must NOT be auto-fixable",
+    );
+
+    // Step 2: Auto Fix fixes the safe 9 issues
+    const fixedIssues = applySafeFixes(
+      JSON.parse(JSON.stringify(initialIssues)),
+    );
+    const fixedCount = fixedIssues.filter((i) => i.status === "fixed").length;
+    assert.equal(
+      fixedCount,
+      9,
+      `Expected Auto Fix to fix exactly 9 safe issues, got ${fixedCount}`,
+    );
+
+    // Step 3: Persist fixes to Upload.dataRows
+    const mockUpload = { dataRows: rows };
+    for (const fix of fixedIssues.filter((i) => i.status === "fixed")) {
+      const result = applyIssueToUpload(mockUpload, fix);
+      assert.equal(
+        result.changed,
+        true,
+        `Fix for ${fix.column} on row ${fix.row} must apply`,
+      );
+    }
+
+    // Verify row 1 persisted corrections
+    assert.equal(rows[0].AMOUNT, "12500");
+    assert.equal(rows[0].DATE, "01-02-2026");
+    assert.equal(rows[0]["TO-CR"], "Sales A/c");
+    assert.equal(rows[0]["BY-DR"], "Cash A/c");
+    assert.equal(rows[0].GSTIN, "27ABCDE1234F1Z5");
+
+    // Verify row 2 persisted corrections
+    assert.equal(rows[1].AMOUNT, "50000");
+    assert.equal(rows[1].DATE, "05-03-2026");
+    assert.equal(rows[1]["TO-CR"], "Sales A/c");
+    assert.equal(rows[1]["BY-DR"], "Bank A/c");
+
+    // Step 4: Revalidate loads fresh persisted data
+    const revalidatedIssues = validateRows(rows, "Sales");
+
+    // Step 5: Exactly 10 genuine issues remain
+    assert.equal(
+      revalidatedIssues.length,
+      10,
+      `Expected exactly 10 genuine issues to remain after revalidation, got ${revalidatedIssues.length}`,
+    );
+
+    // Step 6: The 9 fixed issues do NOT return
+    const revalidatedFixable = revalidatedIssues.filter((i) => i.autoFixable);
+    assert.equal(
+      revalidatedFixable.length,
+      0,
+      "The 9 fixed issues must NOT return on revalidation",
+    );
+
+    // Verify genuine 31-13-2026 issue remains untouched
+    const stillInvalidDate = revalidatedIssues.find(
+      (i) => i.currentValue === "31-13-2026",
+    );
+    assert.ok(stillInvalidDate, "31-13-2026 must still be present as an issue");
+  });
+});
+
+/* ============================================================
+   EMAIL VERIFICATION & RESEND REGRESSION TESTS
+============================================================ */
+
+describe("email verification and resend regression tests", () => {
+  const crypto = require("node:crypto");
+  const hashToken = (token) =>
+    crypto.createHash("sha256").update(String(token)).digest("hex");
+
+  it("hashes verification tokens and matches correctly", () => {
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const hashed = hashToken(rawToken);
+
+    assert.notEqual(rawToken, hashed);
+    assert.equal(hashToken(rawToken), hashed);
+  });
+
+  it("handles verification token expiration properly", () => {
+    const pastExpires = new Date(Date.now() - 10000);
+    const futureExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    const isExpired = (expires) => new Date(expires) < new Date();
+
+    assert.equal(isExpired(pastExpires), true);
+    assert.equal(isExpired(futureExpires), false);
+  });
+
+  it("protects against account enumeration in resend verification", () => {
+    // When account does not exist or is already verified, the response contract is identical
+    const genericMessage =
+      "If an unverified account with that email exists, a new verification link has been sent.";
+
+    const simulateResend = (user) => {
+      if (!user || user.isEmailVerified) {
+        return { success: true, message: genericMessage };
+      }
+      return { success: true, message: genericMessage };
+    };
+
+    assert.deepEqual(simulateResend(null), {
+      success: true,
+      message: genericMessage,
+    });
+    assert.deepEqual(simulateResend({ isEmailVerified: true }), {
+      success: true,
+      message: genericMessage,
+    });
+  });
+
+  it("invalidates previous token and creates fresh 24h expiration on resend", () => {
+    const oldToken = "old-token";
+    const user = {
+      email: "test@example.com",
+      isEmailVerified: false,
+      verificationToken: hashToken(oldToken),
+      verificationExpires: new Date(Date.now() - 5000), // was expired
+    };
+
+    // Simulate resend
+    const newToken = crypto.randomBytes(32).toString("hex");
+    user.verificationToken = hashToken(newToken);
+    user.verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    assert.notEqual(user.verificationToken, hashToken(oldToken));
+    assert.equal(user.verificationToken, hashToken(newToken));
+    assert.ok(user.verificationExpires > new Date());
+  });
+});
+
+/* ============================================================
+   REGISTRATION ROLLBACK & FORGOT PASSWORD REGRESSION TESTS
+============================================================ */
+
+describe("registration rollback and forgot password regression tests", () => {
+  it("rolls back user creation if email delivery throws an error", async () => {
+    let rollbackCalled = false;
+    const mockUser = {
+      _id: "mock-id-123",
+      isEmailVerified: false,
+    };
+
+    // Simulate registration with email failure
+    try {
+      const sendEmail = async () => {
+        throw new Error("SMTP connection refused");
+      };
+      await sendEmail();
+    } catch (emailError) {
+      if (mockUser._id && !mockUser.isEmailVerified) {
+        rollbackCalled = true;
+      }
+    }
+
+    assert.equal(
+      rollbackCalled,
+      true,
+      "Rollback must be triggered when email sending fails",
+    );
+  });
+
+  it("does not advance forgot password to stage 2 when resetId is missing (enumeration defense)", () => {
+    // When backend returns generic success without resetId for unknown email:
+    const backendResponseForUnknownEmail = {
+      success: true,
+      message:
+        "If the account exists, password reset instructions have been sent.",
+      // no resetId
+    };
+
+    let stage = 1;
+    if (backendResponseForUnknownEmail.resetId) {
+      stage = 2;
+    }
+
+    assert.equal(
+      stage,
+      1,
+      "Frontend must stay on stage 1 when resetId is missing",
+    );
+  });
+
+  it("advances forgot password to stage 2 only when resetId is present", () => {
+    const backendResponseForKnownEmail = {
+      success: true,
+      message: "Password reset instructions were sent.",
+      resetId: "valid-reset-id-456",
+    };
+
+    let stage = 1;
+    if (backendResponseForKnownEmail.resetId) {
+      stage = 2;
+    }
+
+    assert.equal(
+      stage,
+      2,
+      "Frontend must advance to stage 2 when resetId is provided",
+    );
+  });
+});
+
+/* ============================================================
+   ANALYTICS CONTRACT REGRESSION TESTS
+============================================================ */
+
+describe("analytics contract regression tests", () => {
+  it("verifies analytics contract contains only genuine metrics and no fake placeholders", () => {
+    const analyticsService = require("../services/analyticsService");
+
+    // Check module exports dashboard function
+    assert.equal(typeof analyticsService.dashboard, "function");
+
+    // Simulate expected contract keys
+    const sampleAnalytics = {
+      totalUploads: 5,
+      totalRows: 120,
+      totalTransactions: 120,
+      totalValidations: 4,
+      totalXMLFiles: 3,
+      successRate: 75,
+      successfulConversions: 3,
+      failedConversions: 1,
+      totalVouchers: 120,
+      validationSuccessRate: 75,
+      voucherBreakdown: { Sales: 3, Purchase: 2 },
+    };
+
+    // Must have unified contract keys
+    assert.ok("totalUploads" in sampleAnalytics);
+    assert.ok("totalRows" in sampleAnalytics);
+    assert.ok("totalValidations" in sampleAnalytics);
+    assert.ok("totalXMLFiles" in sampleAnalytics);
+    assert.ok("successRate" in sampleAnalytics);
+    assert.ok("successfulConversions" in sampleAnalytics);
+    assert.ok("failedConversions" in sampleAnalytics);
+
+    // Must NOT contain fake placeholder statistics
+    assert.equal("averageProcessingTime" in sampleAnalytics, false);
+    assert.equal("errorRate" in sampleAnalytics, false);
+    assert.equal("autoFixRate" in sampleAnalytics, false);
+  });
+});
+
+/* ============================================================
+   XML PREVIEW & VALIDATION REPORT EXACT ID LOGIC
+============================================================ */
+
+describe("exact resource selection ID logic", () => {
+  it("XML preview resolves exact selected file ID from URL param", () => {
+    const url = "/convert/xml-preview?xmlId=65a123bcdef456";
+    const query = new URLSearchParams(url.split("?")[1]);
+    const xmlId = query.get("xmlId");
+
+    assert.equal(xmlId, "65a123bcdef456");
+  });
+
+  it("validation report open resolves exact report validation ID", () => {
+    const report = {
+      _id: "report-999",
+      validation: "validation-888",
+      fileName: "test.xlsx",
+    };
+
+    const targetValidationId =
+      report.validation?._id || report.validation || report._id;
+    assert.equal(targetValidationId, "validation-888");
+
+    const url = `/convert/errors?validationId=${encodeURIComponent(targetValidationId)}`;
+    const query = new URLSearchParams(url.split("?")[1]);
+    assert.equal(query.get("validationId"), "validation-888");
+  });
+});

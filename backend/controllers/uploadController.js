@@ -74,6 +74,9 @@ exports.create = async (req, res, next) => {
     const payload = upload.toObject();
     delete payload.path;
 
+    // Clean up temporary uploaded file from disk now that dataRows are in MongoDB
+    removeFile(req.file.path);
+
     res.status(201).json({ success: true, upload: payload });
   } catch (error) {
     if (req.file?.path) {
@@ -129,8 +132,7 @@ exports.list = async (req, res, next) => {
   try {
     const page = Math.max(1, Number(req.query.page || 1));
     const limit = Math.min(100, Number(req.query.limit || 20));
-    const filter =
-      req.user.role === "admin" ? {} : { user: req.user._id };
+    const filter = req.user.role === "admin" ? {} : { user: req.user._id };
 
     if (req.query.search) {
       const search = new RegExp(escapeRegex(req.query.search), "i");

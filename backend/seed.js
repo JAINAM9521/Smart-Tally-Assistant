@@ -2,13 +2,20 @@
 
 require("dotenv").config();
 
-const dns = require("dns");
+if (
+  process.env.NODE_ENV === "production" &&
+  process.env.ALLOW_SEED !== "true"
+) {
+  console.error("Database seeding is disabled in production environments.");
+  process.exit(1);
+}
 
-// Use public DNS resolvers for MongoDB Atlas SRV records.
-dns.setServers(["8.8.8.8", "1.1.1.1"]);
+const dns = require("dns");
+try {
+  dns.setServers(["8.8.8.8", "1.1.1.1"]);
+} catch (_) {}
 
 const mongoose = require("mongoose");
-
 const User = require("./models/User");
 const { connectDatabase } = require("./config/db");
 const { hashPassword } = require("./utils/password");
@@ -16,12 +23,11 @@ const { hashPassword } = require("./utils/password");
 async function seedDemoAdmin() {
   try {
     console.log("Connecting to MongoDB Atlas...");
-
     await connectDatabase();
-
     console.log("MongoDB connected");
 
-    const passwordHash = await hashPassword("Demo@123");
+    const demoPassword = process.env.DEMO_ADMIN_PASSWORD || "Demo@123";
+    const passwordHash = await hashPassword(demoPassword);
 
     await User.findOneAndUpdate(
       {
@@ -45,9 +51,7 @@ async function seedDemoAdmin() {
     console.log("Demo admin seeded successfully");
   } catch (error) {
     console.error("Database seed failed:");
-
     console.error(error);
-
     process.exitCode = 1;
   } finally {
     try {

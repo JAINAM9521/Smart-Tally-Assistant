@@ -8,6 +8,9 @@ const {
   sendPasswordResetOtp,
 } = require("../services/emailService");
 const { expired } = require("../utils/dateUtils");
+const hashToken = (token) =>
+  crypto.createHash("sha256").update(String(token)).digest("hex");
+
 const publicUser = (user) => ({
   id: user._id,
   name: user.name,
@@ -16,7 +19,9 @@ const publicUser = (user) => ({
   role: user.role,
   isEmailVerified: user.isEmailVerified,
 });
+
 exports.register = async (req, res, next) => {
+  let createdUser = null;
   try {
     const { name, email, password, organization } = req.body;
     if (await User.exists({ email: email.toLowerCase() }))
@@ -26,6 +31,7 @@ exports.register = async (req, res, next) => {
         code: "CONFLICT",
       });
     const token = crypto.randomBytes(32).toString("hex");
+    const hashedToken = hashToken(token);
     const user = await User.create({
       name,
       email,
@@ -33,10 +39,26 @@ exports.register = async (req, res, next) => {
       passwordHash: await hashPassword(password),
       role: "accountant",
       isEmailVerified: false,
-      verificationToken: token,
+      verificationToken: hashedToken,
       verificationExpires: new Date(Date.now() + 24 * 60 * 60 * 1000),
     });
-    await sendVerificationEmail({ email, token });
+    createdUser = user;
+
+    try {
+      await sendVerificationEmail({ email, token });
+    } catch (emailError) {
+      // Rollback newly created unverified account if email delivery fails
+      if (createdUser?._id) {
+        await User.deleteOne({ _id: createdUser._id, isEmailVerified: false });
+      }
+      return res.status(500).json({
+        success: false,
+        message:
+          "Failed to deliver verification email. Account creation rolled back.",
+        code: "EMAIL_DELIVERY_FAILED",
+      });
+    }
+
     res.status(201).json({
       success: true,
       message: "Account created. Verify your email before signing in.",
@@ -47,9 +69,15 @@ exports.register = async (req, res, next) => {
           : token,
     });
   } catch (e) {
+    if (createdUser?._id) {
+      try {
+        await User.deleteOne({ _id: createdUser._id, isEmailVerified: false });
+      } catch (_) {}
+    }
     next(e);
   }
 };
+
 exports.login = async (req, res, next) => {
   try {
     const user = await User.findOne({ email: req.body.email.toLowerCase() });
@@ -59,11 +87,16 @@ exports.login = async (req, res, next) => {
         message: "Invalid credentials",
         code: "UNAUTHORIZED",
       });
-    if (process.env.NODE_ENV === "production" && !user.isEmailVerified)
+    if (
+      !user.isEmailVerified &&
+      (process.env.NODE_ENV === "production" ||
+        process.env.DEV_EMAIL_VERIFICATION !== "false")
+    )
       return res.status(403).json({
         success: false,
         message: "Please verify your email before signing in.",
         code: "EMAIL_NOT_VERIFIED",
+        email: user.email,
       });
     const token = signToken({
       userId: user._id.toString(),
@@ -75,6 +108,7 @@ exports.login = async (req, res, next) => {
     next(e);
   }
 };
+
 exports.me = async (req, res) =>
   res.json({ success: true, user: publicUser(req.user) });
 exports.logout = async (req, res) =>
@@ -85,6 +119,7 @@ exports.refresh = async (req, res) =>
     message: "Login again to issue a fresh token",
     code: "UNAUTHORIZED",
   });
+
 exports.verifyEmail = async (req, res, next) => {
   try {
     const token = String(req.body?.token || "").trim();
@@ -94,12 +129,21 @@ exports.verifyEmail = async (req, res, next) => {
         message: "Verification token is required.",
         code: "VALIDATION_ERROR",
       });
-    const user = await User.findOne({ verificationToken: token });
-    if (!user || !user.verificationExpires || expired(user.verificationExpires))
+    const hashed = hashToken(token);
+    const user = await User.findOne({
+      $or: [{ verificationToken: hashed }, { verificationToken: token }],
+    });
+    if (!user)
       return res.status(400).json({
         success: false,
-        message: "Verification token is invalid or expired.",
-        code: "VALIDATION_ERROR",
+        message: "Verification token is invalid.",
+        code: "INVALID_TOKEN",
+      });
+    if (!user.verificationExpires || expired(user.verificationExpires))
+      return res.status(400).json({
+        success: false,
+        message: "Verification token has expired. Please request a new one.",
+        code: "EXPIRED_TOKEN",
       });
     user.isEmailVerified = true;
     user.verificationToken = undefined;
@@ -110,14 +154,31 @@ exports.verifyEmail = async (req, res, next) => {
     next(e);
   }
 };
+
 exports.verifyEmailToken = async (req, res, next) => {
   try {
-    const user = await User.findOne({ verificationToken: req.params.token });
-    if (!user || !user.verificationExpires || expired(user.verificationExpires))
+    const token = String(req.params.token || "").trim();
+    if (!token)
       return res.status(400).json({
         success: false,
-        message: "Verification token is invalid or expired",
+        message: "Verification token is required",
         code: "VALIDATION_ERROR",
+      });
+    const hashed = hashToken(token);
+    const user = await User.findOne({
+      $or: [{ verificationToken: hashed }, { verificationToken: token }],
+    });
+    if (!user)
+      return res.status(400).json({
+        success: false,
+        message: "Verification token is invalid",
+        code: "INVALID_TOKEN",
+      });
+    if (!user.verificationExpires || expired(user.verificationExpires))
+      return res.status(400).json({
+        success: false,
+        message: "Verification token has expired. Please request a new one.",
+        code: "EXPIRED_TOKEN",
       });
     user.isEmailVerified = true;
     user.verificationToken = undefined;
@@ -128,6 +189,50 @@ exports.verifyEmailToken = async (req, res, next) => {
     next(e);
   }
 };
+
+exports.resendVerification = async (req, res, next) => {
+  try {
+    const email = String(req.body?.email || "")
+      .toLowerCase()
+      .trim();
+    if (!email)
+      return res.status(400).json({
+        success: false,
+        message: "Email is required",
+        code: "VALIDATION_ERROR",
+      });
+
+    const user = await User.findOne({ email });
+    // Generic response to prevent account enumeration
+    if (!user || user.isEmailVerified) {
+      return res.json({
+        success: true,
+        message:
+          "If an unverified account with that email exists, a new verification email has been sent.",
+      });
+    }
+
+    const token = crypto.randomBytes(32).toString("hex");
+    user.verificationToken = hashToken(token);
+    user.verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await user.save();
+
+    await sendVerificationEmail({ email: user.email, token });
+
+    return res.json({
+      success: true,
+      message:
+        "If an unverified account with that email exists, a new verification email has been sent.",
+      developmentVerificationToken:
+        process.env.NODE_ENV === "production" || process.env.EMAIL_HOST
+          ? undefined
+          : token,
+    });
+  } catch (e) {
+    next(e);
+  }
+};
+
 exports.forgotPassword = async (req, res, next) => {
   try {
     const user = await User.findOne({ email: req.body.email.toLowerCase() });
